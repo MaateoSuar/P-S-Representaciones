@@ -177,10 +177,8 @@ def generate_pdf_remito(pdf_path: str, order: dict):
 
     # Column positions (right-aligned from the right margin)
     x_cant = width - margin
-    x_punit = x_cant - 50  # P.Unit
-    x_pct = x_punit - 40   # %
-    x_cost = x_pct - 60    # Costo
-    x_venc = x_cost - 70   # Venc.
+    x_punit = x_cant - 60  # P.Unit
+    x_venc = x_punit - 80  # Venc.
     x_prod = margin        # Producto starts at left margin
 
     y = height - margin
@@ -200,8 +198,6 @@ def generate_pdf_remito(pdf_path: str, order: dict):
         c.setFont("Helvetica-Bold", 10)
         c.drawString(x_prod, current_y, "Producto")
         c.drawRightString(x_venc, current_y, "Venc.")
-        c.drawRightString(x_cost, current_y, "Costo")
-        c.drawRightString(x_pct, current_y, "%")
         c.drawRightString(x_punit, current_y, "P.Unit")
         c.drawRightString(x_cant, current_y, "Cant")
         current_y -= 5 * mm
@@ -232,8 +228,6 @@ def generate_pdf_remito(pdf_path: str, order: dict):
 
         c.drawString(x_prod, y, name)
         c.drawRightString(x_venc, y, str(item.get("vencimiento", "")))
-        c.drawRightString(x_cost, y, f"{item['cost']:.2f}")
-        c.drawRightString(x_pct, y, f"{item['margin']:.1f}")
         c.drawRightString(x_punit, y, f"{item['final_price']:.2f}")
         c.drawRightString(x_cant, y, str(item['qty']))
         y -= 7 * mm  # slightly taller rows to avoid visual overlap
