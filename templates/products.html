@@ -1,10 +1,10 @@
 {% extends 'layout.html' %}
 {% block content %}
 <div class="bg-white rounded-lg shadow p-6">
-  <form method="get" class="flex flex-col md:flex-row gap-3 items-end mb-4">
+  <form method="get" class="flex flex-col md:flex-row gap-3 items-end mb-4" id="products-filter-form" onsubmit="return false;">
     <div class="flex-1">
       <label class="block text-sm text-gray-600">Buscar</label>
-      <input class="input-field w-full rounded px-3 py-2" type="text" name="q" value="{{ q }}" placeholder="Nombre del producto" />
+      <input class="input-field w-full rounded px-3 py-2" type="text" name="q" value="{{ q }}" placeholder="Nombre del producto" autocomplete="off" />
     </div>
     <div>
       <label class="block text-sm text-gray-600">Margen %</label>
@@ -25,7 +25,7 @@
           <th class="px-4 py-2"></th>
         </tr>
       </thead>
-      <tbody class="bg-white divide-y divide-gray-200">
+      <tbody class="bg-white divide-y divide-gray-200" id="products-body">
         {% for p in products %}
         <tr>
           <td class="px-4 py-2">{{ p.name }}</td>
@@ -49,14 +49,62 @@
 </div>
 <script>
   (function(){
-    var input = document.querySelector('input[name="q"]');
-    if(!input) return;
-    var form = input.form;
-    var t;
-    input.addEventListener('input', function(){
-      clearTimeout(t);
-      t = setTimeout(function(){ form.requestSubmit ? form.requestSubmit() : form.submit(); }, 300);
-    });
+    const form = document.getElementById('products-filter-form');
+    if (!form) return;
+    const qInput = form.querySelector('input[name="q"]');
+    const marginInput = form.querySelector('input[name="margin"]');
+    const tbody = document.getElementById('products-body');
+    const cartAddUrl = "{{ url_for('cart_add') }}";
+    let timer;
+
+    async function fetchAndRender(){
+      const params = new URLSearchParams({
+        q: qInput.value || '',
+        margin: marginInput.value || '20'
+      });
+      try {
+        const res = await fetch(`/api/products?${params.toString()}`, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) return;
+        const data = await res.json();
+        const rows = (data.products || []).map(p => `
+          <tr>
+            <td class="px-4 py-2">${escapeHtml(p.name ?? '')}</td>
+            <td class="px-4 py-2 text-right">${escapeHtml(p.vencimiento ?? '')}</td>
+            <td class="px-4 py-2 text-right">$${Number(p.cost ?? 0).toFixed(2)}</td>
+            <td class="px-4 py-2 text-right">$${Number(p.final_price ?? 0).toFixed(2)}</td>
+            <td class="px-4 py-2 text-right">
+              <form method="post" action="${cartAddUrl}" class="flex items-center justify-end gap-2">
+                <input type="hidden" name="id" value="${p.id}" />
+                <input type="hidden" name="margin" value="${marginInput.value}" />
+                <input class="input-field w-20 rounded px-2 py-1 text-right" type="number" name="qty" min="1" value="1" />
+                <button class="btn-primary px-3 py-1 rounded" type="submit">Agregar</button>
+              </form>
+            </td>
+            <td class="px-4 py-2"></td>
+          </tr>`).join('');
+        tbody.innerHTML = rows || '<tr><td class="px-4 py-4 text-center text-gray-500" colspan="6">Sin resultados</td></tr>';
+      } catch (e) {
+        // opcional: mostrar error
+      }
+    }
+
+    function debounceFetch(){
+      clearTimeout(timer);
+      timer = setTimeout(fetchAndRender, 200);
+    }
+
+    // Simple HTML escape to avoid injecting raw values
+    function escapeHtml(str){
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    qInput.addEventListener('input', debounceFetch);
+    marginInput.addEventListener('input', debounceFetch);
   })();
 </script>
 {% endblock %}

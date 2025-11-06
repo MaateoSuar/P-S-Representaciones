@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, session, send_from_directory, flash
+from flask import Flask, render_template, request, redirect, url_for, session, send_from_directory, flash, jsonify
 import pandas as pd
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -85,6 +85,18 @@ def products():
     df = df.copy()
     df["final_price"] = (df["cost"] * (1 + margin / 100)).round(2)
     return render_template("products.html", products=df.to_dict(orient="records"), margin=margin, q=q)
+
+
+@app.route("/api/products")
+def api_products():
+    df = load_products()
+    q = request.args.get("q", "").strip().lower()
+    margin = float(request.args.get("margin", "20") or 0)
+    if q:
+        df = df[df["name"].str.lower().str.contains(q)]
+    df = df.copy()
+    df["final_price"] = (df["cost"] * (1 + margin / 100)).round(2)
+    return jsonify({"products": df.to_dict(orient="records")})
 
 
 @app.route("/cart")
