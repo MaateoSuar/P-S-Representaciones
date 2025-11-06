@@ -1,0 +1,85 @@
+Proyecto: Pablo y Sergio Representaciones (Demo Flask + Pandas)
+
+Objetivo
+- Mostrar listado de precios desde CSV (o URL Apps Script), aplicar margen %, armar carrito y generar remito PDF para enviar a cliente.
+- No se sube Excel en la app. La fuente será: CSV local o una URL (Apps Script) que devuelva CSV.
+
+Stack y dependencias
+- Python 3.10+
+- Flask 3.0.0
+- pandas 2.2.2
+- reportlab 4.2.2 (PDF)
+
+Ejecución rápida (Windows/PowerShell)
+1) Crear venv e instalar deps:
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+2) Ejecutar:
+   py app.py
+   Navegar a http://localhost:5000
+
+Datos de productos
+- Por defecto lee data/products.csv (de ejemplo).
+- Variables de entorno (opcionales):
+  - PRODUCTS_CSV: ruta a un CSV local (si no se usa el por defecto).
+  - PRODUCTS_CSV_URL: URL pública a CSV. Si está definida, tiene prioridad sobre PRODUCTS_CSV.
+  - APP_SECRET: secreto de sesión Flask.
+- Columnas esperadas: name, cost, vencimiento. El backend intenta mapear variantes comunes (producto, precio/costo, fecha vencimiento/fecha_vencimiento).
+
+Estructura
+- app.py: servidor Flask, rutas, carrito (en sesión), generación de PDF y listado de historial.
+- templates/
+  - layout.html: base y navbar (Productos, Carrito, Historial).
+  - dashboard.html: panel simple.
+  - products.html: búsqueda, margen y agregar al carrito.
+  - cart.html: listado de ítems, total y checkout (genera PDF y guarda JSON del pedido).
+  - history.html: historial de pedidos, link de descarga de remitos.
+- static/style.css: estilos (copiados de style.css original para integración).
+- data/products.csv: ejemplo de datos (a reemplazar por CSV real o URL Apps Script).
+- pdfs/: salen los remitos generados.
+- orders/: JSONs de los pedidos realizados.
+- README.md: instrucciones de uso y variables.
+
+Rutas principales
+- /               dashboard
+- /products       listado de productos con margen % (query ?q=&margin=)
+- /cart           ver carrito
+- /cart/add       POST agrega productos (id, qty, margin)
+- /cart/clear     POST vacía el carrito
+- /checkout       POST genera el remito PDF y un JSON de pedido
+- /remitos/<pdf>  descarga del remito generado
+- /history        historial de pedidos
+
+Carrito y margen
+- El margen se aplica al costo para calcular precio final (p.final = cost * (1 + margin/100)).
+- Si se agrega el mismo producto con el mismo margen, se consolida la cantidad.
+
+PDF (reportlab)
+- Archivo: pdfs/remito-<order_id>.pdf
+- Encabezado: "Remito / Presupuesto - Pablo y Sergio Representaciones".
+- Columnas con posiciones fijas para evitar solapes: Producto | Venc. | Costo | % | P.Unit | Cant
+- Se trunca el nombre de producto con elipsis si no entra en el ancho disponible.
+- Total al final.
+
+Branding
+- Nombre visible en la app y PDF: "Pablo y Sergio Representaciones".
+
+Qué se removió o no se usa
+- No se usa el flujo de subir Excel en el frontend (components/excel-upload.js queda sin uso).
+- La UI original HTML/JS queda, pero el flujo nuevo utiliza Flask + templates (Jinja).
+
+Historial (demo)
+- Al confirmar el carrito, se guarda un JSON del pedido en orders/ y el PDF en pdfs/.
+- /history muestra la lista (ordenada desc) con link de descarga del PDF si existe.
+
+Tareas pendientes/ideas futuras
+- Envío de remito por email (SMTP).
+- Clientes persistentes y reportes.
+- Integración final con Apps Script: publicar Web App que emita CSV y configurar PRODUCTS_CSV_URL.
+- Logo en PDF, configurar encabezado/dirección/condiciones comerciales.
+
+Notas rápidas para retomar
+- Para usar Apps Script: asegurar que devuelva text/csv con columnas esperadas y URL pública.
+- Si el cliente pide más campos (lote, stock, etc.), agregarlos al CSV y extender tablas/plantillas.
+- Para estilos, modificar static/style.css.
