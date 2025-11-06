@@ -47,4 +47,17 @@
     </table>
   </div>
 </div>
+<script>
+  (function(){
+    var input = document.querySelector('input[name="q"]');
+    if(!input) return;
+    var form = input.form;
+    var t;
+    input.addEventListener('input', function(){
+      clearTimeout(t);
+      t = setTimeout(function(){ form.requestSubmit ? form.requestSubmit() : form.submit(); }, 300);
+    });
+  })();
+</script>
 {% endblock %}
+
