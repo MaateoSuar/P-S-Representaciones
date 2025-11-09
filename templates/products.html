@@ -165,6 +165,28 @@
       }
     }
 
+    // Set active client in session and update margin/labels without repainting table
+    async function setActiveClient(forcedName){
+      const raw = (forcedName != null ? forcedName : clientInput.value) || '';
+      const name = raw.trim();
+      if (!name) return;
+      try {
+        const params = new URLSearchParams({ client: name });
+        const res = await fetch(`/api/products?${params.toString()}`, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (typeof data.margin !== 'undefined' && data.margin !== null) {
+          marginInput.value = data.margin;
+        }
+        const oppHidden = document.getElementById('opp-client-name');
+        if (oppHidden) oppHidden.value = name;
+        const clientLabel = document.getElementById('client-active-label');
+        if (clientLabel) clientLabel.textContent = name ? `Cliente activo: ${name}` : '';
+        // normalize input to resolved name (proper casing)
+        if (!forcedName && data.current_client_name) clientInput.value = data.current_client_name;
+      } catch(_) {}
+    }
+
     function debounceFetch(){
       clearTimeout(timer);
       timer = setTimeout(fetchAndRender, 200);
@@ -184,16 +206,34 @@
     // Do not auto-fetch on margin or client typing; suggestions only
     clientInput.addEventListener('input', () => {
       // build pretty suggestions
-      const q = (clientInput.value || '').toLowerCase();
+      const q = (clientInput.value || '').trim().toLowerCase();
       if (!q) { suggBox.classList.add('hidden'); suggBox.innerHTML=''; return; }
       buildSuggestions(q);
       // no fetch here; will apply on button
+      // If text exactly matches an existing client, set active immediately
+      const exact = (allClients || []).find(c => (c && c.name ? c.name : '').toLowerCase() === q);
+      if (exact) {
+        setActiveClient(exact.name);
+      } else {
+        // If there is a single suggestion, set it as active (soft selection)
+        const candidates = (allClients || []).map(c=>c&&c.name?c.name:'').filter(n=> n && n.toLowerCase().includes(q));
+        if (candidates.length === 1) {
+          setActiveClient(candidates[0]);
+        }
+      }
+    });
+    clientInput.addEventListener('change', setActiveClient);
+    clientInput.addEventListener('blur', () => {
+      const q = (clientInput.value || '').trim().toLowerCase();
+      if (!q) return;
+      const candidates = (allClients || []).map(c=>c&&c.name?c.name:'').filter(n=> n && n.toLowerCase().includes(q));
+      if (candidates.length > 0) setActiveClient(candidates[0]);
     });
     // Apply button (form submit)
     form.addEventListener('submit', (e)=>{ e.preventDefault(); fetchReason='apply'; fetchAndRender(); });
     const applyBtn = document.getElementById('apply-btn');
     if (applyBtn) applyBtn.addEventListener('click', (e)=>{ e.preventDefault(); fetchReason='apply'; fetchAndRender(); });
-    clientInput.addEventListener('change', fetchAndRender);
+    // Do not repaint table on client change automatically
     function renderSuggestions() {
       if (!suggMatches.length) { suggBox.classList.add('hidden'); suggBox.innerHTML=''; return; }
       suggBox.innerHTML = suggMatches.map((n, i) => `
@@ -223,31 +263,42 @@
       if (idx < 0 || idx >= suggMatches.length) return;
       clientInput.value = suggMatches[idx];
       suggBox.classList.add('hidden');
-      // do not fetch automatically; will update on Aplicar
+      // Immediately set active client (session/margin/labels), do not repaint table yet
+      setActiveClient();
     }
 
-    clientInput.addEventListener('input', () => {
-      const q = (clientInput.value || '').toLowerCase();
-      if (!q) { suggBox.classList.add('hidden'); suggBox.innerHTML=''; debounceFetch(); return; }
-      buildSuggestions(q);
-      fetchReason='client';
-      debounceFetch();
-    });
+    
 
     clientInput.addEventListener('keydown', (e) => {
-      if (suggBox.classList.contains('hidden')) return;
-      if (e.key === 'ArrowDown') {
+      // Navigate suggestions
+      if (!suggBox.classList.contains('hidden') && e.key === 'ArrowDown') {
         e.preventDefault();
         suggIndex = (suggIndex + 1) % suggMatches.length;
         renderSuggestions();
-      } else if (e.key === 'ArrowUp') {
+        return;
+      }
+      if (!suggBox.classList.contains('hidden') && e.key === 'ArrowUp') {
         e.preventDefault();
         suggIndex = (suggIndex - 1 + suggMatches.length) % suggMatches.length;
         renderSuggestions();
-      } else if (e.key === 'Enter') {
-        if (suggIndex >= 0) {
-          e.preventDefault();
+        return;
+      }
+      if (e.key === 'Enter') {
+        // On Enter: activate best match without repainting
+        e.preventDefault();
+        if (!suggBox.classList.contains('hidden') && suggIndex >= 0) {
           applySuggestion(suggIndex);
+        } else {
+          const q = (clientInput.value || '').trim().toLowerCase();
+          if (q) {
+            const exact = (allClients || []).find(c => (c && c.name ? c.name : '').toLowerCase() === q);
+            if (exact) {
+              setActiveClient(exact.name);
+            } else {
+              const candidates = (allClients || []).map(c=>c&&c.name?c.name:'').filter(n=> n && n.toLowerCase().includes(q));
+              if (candidates.length > 0) setActiveClient(candidates[0]);
+            }
+          }
         }
       } else if (e.key === 'Escape') {
         suggBox.classList.add('hidden');
