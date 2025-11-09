@@ -5,7 +5,10 @@
     <!-- Row 1: Client full width -->
     <div class="relative">
       <label class="block text-sm text-gray-600">Cliente</label>
-      <input class="input-field w-full rounded px-3 py-2 h-[42px]" type="text" name="client" value="{{ current_client_name or client }}" placeholder="Escribir nombre del cliente" autocomplete="off" />
+      <div class="flex gap-2">
+        <input class="input-field w-full rounded px-3 py-2 h-[42px]" type="text" name="client" value="{{ current_client_name or client }}" placeholder="Escribir nombre del cliente" autocomplete="off" />
+        <a href="{{ url_for('clients_new') }}" class="px-3 py-2 h-[42px] rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 whitespace-nowrap">Crear cliente</a>
+      </div>
       <div id="client-suggestions" class="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg hidden max-h-56 overflow-auto">
         <!-- suggestions injected here -->
       </div>

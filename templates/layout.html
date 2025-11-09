@@ -14,9 +14,9 @@
   <header class="fixed top-0 left-0 right-0 bg-white shadow z-10">
     <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
       <a href="{{ url_for('dashboard') }}" class="text-emerald-700 font-semibold">Pablo y Sergio Representaciones</a>
-      <nav class="flex items-center gap-4">
+      <nav class="flex items-center gap-3">
         <a class="text-gray-600 hover:text-emerald-700" href="{{ url_for('products') }}">Productos</a>
-        <a class="relative inline-flex items-center pr-4 text-gray-600 hover:text-emerald-700" href="{{ url_for('cart_view') }}">
+        <a class="relative inline-flex items-center pr-2 text-gray-600 hover:text-emerald-700" href="{{ url_for('cart_view') }}">
           Carrito
           {% if cart_count and cart_count > 0 %}
             <span id="nav-cart-badge" class="absolute -top-1 -right-1 inline-flex items-center justify-center text-[11px] font-medium w-5 h-5 rounded-full bg-emerald-600 text-white shadow ring-2 ring-white">{{ cart_count }}</span>
@@ -24,11 +24,12 @@
             <span id="nav-cart-badge" class="hidden"></span>
           {% endif %}
         </a>
+        <span class="text-gray-300">|</span>
         <a class="text-gray-600 hover:text-emerald-700" href="{{ url_for('clients_list') }}">Clientes</a>
         <a class="text-gray-600 hover:text-emerald-700" href="{{ url_for('history') }}">Historial</a>
         <a class="text-gray-600 hover:text-emerald-700" href="{{ url_for('pipeline_view') }}">Pipeline</a>
-        <span class="h-6 border-l border-gray-200 mx-1"></span>
-        <a id="logout-link" class="pl-3 text-gray-600 hover:text-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 transition"
+        <span class="text-gray-300">|</span>
+        <a id="logout-link" class="pl-2 text-gray-600 hover:text-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 transition"
            href="{{ url_for('logout') }}" title="Cerrar sesión">Salir</a>
       </nav>
     </div>
@@ -92,13 +93,13 @@
       acceptBtn.addEventListener('click', ()=>{ if (onOk) onOk(); closeConfirm(); });
       window.confirmAction = function(opts, ok){ onOk = ok; openConfirm(opts); };
 
-      // Logout link -> modal
+      // Logout link -> modal (neutral style, not red)
       const logout = document.getElementById('logout-link');
       if (logout){
         logout.addEventListener('click', function(e){
           e.preventDefault();
           const href = this.getAttribute('href');
-          window.confirmAction({ title: 'Cerrar sesión', message: '¿Seguro que querés cerrar sesión?', okText: 'Cerrar sesión', okColor:'red' }, ()=>{ window.location.href = href; });
+          window.confirmAction({ title: 'Cerrar sesión', message: '¿Seguro que querés cerrar sesión?', okText: 'Cerrar sesión', okColor:'emerald' }, ()=>{ window.location.href = href; });
         });
       }
     })();
