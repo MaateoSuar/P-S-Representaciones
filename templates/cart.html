@@ -51,7 +51,7 @@
       </div>
     </div>
 
-    <form method="post" action="{{ url_for('checkout') }}" class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-3">
+    <form id="checkout-form" method="post" action="{{ url_for('checkout') }}" class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-3">
       <div>
         <label class="block text-sm text-gray-600">Cliente</label>
         <input class="input-field w-full rounded px-3 py-2" type="text" name="client_name" placeholder="Nombre de la farmacia" value="{{ current_client_name or '' }}" required />
@@ -79,6 +79,18 @@
         }
       });
     });
+
+    // On checkout submit, reset nav cart badge instantly for visual feedback
+    const checkoutForm = document.getElementById('checkout-form');
+    if (checkoutForm) {
+      checkoutForm.addEventListener('submit', function(){
+        const badge = document.getElementById('nav-cart-badge');
+        if (badge) {
+          badge.textContent = '0';
+          badge.className = 'hidden';
+        }
+      });
+    }
   })();
   </script>
 </div>

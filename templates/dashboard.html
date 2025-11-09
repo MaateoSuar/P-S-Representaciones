@@ -19,10 +19,63 @@
   </div>
 </div>
 
-<div class="bg-white rounded-lg shadow p-6">
-  <div class="flex items-center justify-between">
-    <h2 class="text-xl font-semibold text-gray-800">Bienvenido</h2>
-    <a class="text-emerald-700" href="{{ url_for('products') }}">Ir a Productos →</a>
+<div class="bg-white rounded-lg shadow p-6 mb-8">
+  <h2 class="text-lg font-semibold text-gray-800 mb-4">Acciones rápidas</h2>
+  <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+    <a href="{{ url_for('order_new') }}" class="px-4 py-3 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-center">Nuevo pedido</a>
+    <a href="{{ url_for('cart_view') }}" class="px-4 py-3 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-center">Ver carrito</a>
+    <a href="{{ url_for('clients_list') }}" class="px-4 py-3 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-center">Clientes</a>
+    <a href="{{ url_for('history') }}" class="px-4 py-3 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-center">Historial</a>
+    <a href="{{ url_for('pipeline_view') }}" class="px-4 py-3 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-center">Pipeline</a>
+  </div>
+  </div>
+
+<div class="bg-white rounded-lg shadow p-6 mb-8">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-lg font-semibold text-gray-800">Ventas últimos 30 días</h2>
+  </div>
+  <div class="h-64">
+    <canvas id="salesChart"></canvas>
   </div>
 </div>
+
+<script id="sales-data" type="application/json">{{ {'labels': sales_labels, 'values': sales_values} | tojson }}</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  (function(){
+    const el = document.getElementById('salesChart');
+    if (!el) return;
+    let cfg = { labels: [], values: [] };
+    try {
+      const raw = document.getElementById('sales-data');
+      if (raw) cfg = JSON.parse(raw.textContent || '{}');
+    } catch(_) {}
+    const labels = Array.isArray(cfg.labels) ? cfg.labels : [];
+    const data = Array.isArray(cfg.values) ? cfg.values : [];
+    new Chart(el, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Ventas',
+          data,
+          borderColor: '#059669',
+          backgroundColor: 'rgba(5,150,105,0.1)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 10 } },
+          y: { beginAtZero: false }
+        }
+      }
+    });
+  })();
+</script>
 {% endblock %}

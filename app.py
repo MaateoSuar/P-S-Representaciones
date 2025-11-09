@@ -13,7 +13,8 @@ from email.message import EmailMessage
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret-change-me")
 DATA_CSV_PATH = os.environ.get("PRODUCTS_CSV", os.path.join(os.path.dirname(__file__), "data", "products.csv"))
-REMOTE_CSV_URL = os.environ.get("PRODUCTS_CSV_URL")  # Optional URL (e.g., Apps Script publish URL)
+REMOTE_CSV_URL = None
+GOOGLE_SHEETS_URL = "https://docs.google.com/spreadsheets/d/1qhlOeGUZioluGrGX8WoOnN2PxklVQJ-aU6_9DFMI-hs/edit?gid=1541872518#gid=1541872518"
 
 app = Flask(__name__)
 app.secret_key = APP_SECRET
@@ -85,6 +86,31 @@ def load_products() -> pd.DataFrame:
     """Load products either from remote URL or local CSV. Expected columns: name, cost, vencimiento"""
     if REMOTE_CSV_URL:
         df = pd.read_csv(REMOTE_CSV_URL)
+    elif GOOGLE_SHEETS_URL:
+        # Convert a Google Sheets edit URL to a CSV export URL preserving gid
+        try:
+            url = GOOGLE_SHEETS_URL
+            # Extract doc id between /d/ and next '/'
+            doc_id = None
+            if "/d/" in url:
+                part = url.split("/d/", 1)[1]
+                doc_id = part.split("/", 1)[0]
+            # Extract gid
+            import urllib.parse as _up
+            parsed = _up.urlparse(url)
+            qs = _up.parse_qs(parsed.query)
+            gid = (qs.get("gid", ["0"]) or ["0"])[0]
+            if doc_id:
+                export_url = f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=csv&gid={gid}"
+                df = pd.read_csv(export_url)
+            else:
+                # Fallback: try direct
+                df = pd.read_csv(url)
+        except Exception:
+            # Fallback to local if conversion fails
+            if not os.path.exists(DATA_CSV_PATH):
+                return pd.DataFrame(columns=["name", "cost", "vencimiento"]).astype({"name": str, "cost": float, "vencimiento": str})
+            df = pd.read_csv(DATA_CSV_PATH)
     else:
         if not os.path.exists(DATA_CSV_PATH):
             return pd.DataFrame(columns=["name", "cost", "vencimiento"]).astype({"name": str, "cost": float, "vencimiento": str})
@@ -92,8 +118,17 @@ def load_products() -> pd.DataFrame:
     # Normalize columns in case of mixed names
     cols = {c.lower().strip(): c for c in df.columns}
     name_col = cols.get("name") or cols.get("producto")
-    cost_col = cols.get("cost") or cols.get("precio") or cols.get("costo")
-    venc_col = cols.get("vencimiento") or cols.get("fecha vencimiento") or cols.get("fecha_vencimiento")
+    # Accept custom cost header '-3%'
+    cost_col = cols.get("cost") or cols.get("precio") or cols.get("costo") or cols.get("-3%") or cols.get("- 3%")
+    # Accept typo 'fecha vencimeinto' and other variants
+    venc_col = (
+        cols.get("vencimiento")
+        or cols.get("fecha vencimiento")
+        or cols.get("fecha_vencimiento")
+        or cols.get("fecha vencimeinto")
+        or cols.get("vto")
+        or cols.get("fecha vto")
+    )
     rename_map = {}
     if name_col and name_col != "name":
         rename_map[name_col] = "name"
@@ -103,11 +138,23 @@ def load_products() -> pd.DataFrame:
         rename_map[venc_col] = "vencimiento"
     if rename_map:
         df = df.rename(columns=rename_map)
-    # Coerce types
+    # Coerce types and normalize values
+    if "name" in df:
+        df["name"] = df["name"].astype(str).str.strip()
     if "cost" in df:
-        df["cost"] = pd.to_numeric(df["cost"], errors="coerce")
+        # Normalize common LATAM formats: "$ 1.234,56" -> "1234.56"
+        cost_s = df["cost"].astype(str).str.strip()
+        # Keep only digits, separators and sign
+        cost_s = cost_s.str.replace(r"[^0-9,.-]", "", regex=True)
+        # If there is a comma, treat '.' as thousands separator and remove it
+        has_comma = cost_s.str.contains(",")
+        cost_s = cost_s.where(~has_comma, cost_s.str.replace(r"\.(?=\d{3}(\D|$))", "", regex=True))
+        # Replace comma decimal with dot
+        cost_s = cost_s.str.replace(",", ".", regex=False)
+        df["cost"] = pd.to_numeric(cost_s, errors="coerce")
     if "vencimiento" in df:
         df["vencimiento"] = df["vencimiento"].astype(str)
+    # Drop rows without name or cost not parsed
     df = df.dropna(subset=["name", "cost"]).reset_index(drop=True)
     df["id"] = df.index.astype(int)
     return df[["id", "name", "cost", "vencimiento"]]
@@ -167,7 +214,28 @@ def dashboard():
         "ventas_hoy": round(ventas_hoy, 2),
         "margen_prom": round(margen_prom, 1),
     }
-    return render_template("dashboard.html", stats=stats)
+    # Build last 30 days sales series
+    # Aggregate totals by date (YYYY-MM-DD) from saved orders
+    from collections import defaultdict
+    sales_by_day = defaultdict(float)
+    if os.path.isdir(ORDERS_DIR):
+        for fname in os.listdir(ORDERS_DIR):
+            if not fname.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(ORDERS_DIR, fname), "r", encoding="utf-8") as f:
+                    order = json.load(f)
+                created = order.get("created_at", "")
+                if len(created) >= 10:
+                    day = created[:10]  # YYYY-MM-DD
+                    sales_by_day[day] += float(order.get("total", 0.0))
+            except Exception:
+                continue
+    # Compose chronological labels and values for last 30 days
+    last_30 = [date.fromordinal(date.today().toordinal() - i) for i in range(29, -1, -1)]
+    sales_labels = [f"{d.day}/{d.month}" for d in last_30]
+    sales_values = [round(sales_by_day.get(d.isoformat(), 0.0), 2) for d in last_30]
+    return render_template("dashboard.html", stats=stats, sales_labels=sales_labels, sales_values=sales_values)
 
 
  
@@ -177,17 +245,6 @@ def dashboard():
 def api_products():
     df = load_products()
     q = request.args.get("q", "").strip().lower()
-    client_query = request.args.get("client", "").strip()
-    # Optionally set client from API for dynamic updates
-    if client_query:
-        clients = load_clients()
-        found = next((c for c in clients if c.get("name", "").strip().lower() == client_query.lower()), None)
-        if found:
-            session["current_client_id"] = found.get("id")
-            session["current_client_name"] = found.get("name")
-            session["current_client_margin"] = found.get("default_margin", 20.0)
-            session["current_client_email"] = found.get("email", "")
-            session.modified = True
     margin = request.args.get("margin")
     if margin is None:
         margin = session.get("current_client_margin", 20.0)
@@ -249,19 +306,6 @@ def cart_add():
         or request.form.get("ajax") == "1"
         or (request.headers.get("Referer") and "/products" in request.headers.get("Referer"))
     )
-    # If there is an active opportunity, promote it to 'Pedido'
-    opp_id = session.get("current_opportunity_id")
-    if opp_id:
-        opp_path = os.path.join(ORDERS_DIR, f"{opp_id}.json")
-        if os.path.exists(opp_path):
-            try:
-                with open(opp_path, "r", encoding="utf-8") as f:
-                    opp = json.load(f)
-                opp["state"] = "Pedido"
-                with open(opp_path, "w", encoding="utf-8") as f:
-                    json.dump(opp, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
     if wants_json:
         count = sum(int(i.get("qty", 0)) for i in cart)
         return jsonify({"ok": True, "cart_count": count})
@@ -298,13 +342,12 @@ def checkout():
     client_name = request.form.get("client_name", "Cliente")
     client_email = request.form.get("client_email", "")
     now = datetime.now()
-    # Reuse existing opportunity id if present
-    order_id = session.get("current_opportunity_id") or now.strftime("%Y%m%d-%H%M%S")
+    order_id = now.strftime("%Y%m%d-%H%M%S")
     total = sum(item["final_price"] * item["qty"] for item in cart)
 
     # Save a simple order record
-    # Determine pipeline state
-    state = "Remito"  # after checkout we consider remito generated
+    # Determine pipeline state (start at 'Pedido')
+    state = "Pedido"
     order = {
         "order_id": order_id,
         "client_name": client_name,
@@ -341,11 +384,10 @@ def checkout():
         except Exception:
             flash("No se pudo enviar el email del remito", "error")
 
-    # Clear cart and current opportunity
+    # Clear cart
     save_cart([])
-    session.pop("current_opportunity_id", None)
 
-    return redirect(url_for("download_remito", filename=os.path.basename(pdf_path)))
+    return redirect(url_for("history"))
 
 
 def generate_pdf_remito(pdf_path: str, order: dict):
@@ -471,6 +513,14 @@ def history():
                     data = json.load(f)
                 order_id = data.get("order_id", os.path.splitext(fname)[0])
                 created_at = data.get("created_at", "")
+                # Build display date as DD/MM/AAAA
+                created_display = ""
+                try:
+                    if created_at:
+                        dt = datetime.fromisoformat(created_at)
+                        created_display = dt.strftime("%d/%m/%Y")
+                except Exception:
+                    created_display = created_at[:10]
                 client_name = data.get("client_name", "")
                 total = data.get("total", 0)
                 # Prefer stored filename, else fallback to old naming
@@ -484,61 +534,22 @@ def history():
                 orders.append({
                     "order_id": order_id,
                     "created_at": created_at,
+                    "created_display": created_display,
                     "client_name": client_name,
                     "total": total,
                     "pdf_name": pdf_name if pdf_exists else None,
                 })
             except Exception:
                 continue
+    # Optional filter by client name substring (case-insensitive)
+    q = request.args.get("q", "").strip().lower()
+    if q:
+        orders = [o for o in orders if q in (o.get("client_name", "").lower())]
     # Sort by created_at/order_id desc
     orders.sort(key=lambda x: (x.get("created_at", ""), x.get("order_id", "")), reverse=True)
-    return render_template("history.html", orders=orders)
+    return render_template("history.html", orders=orders, q=q)
 
 
-@app.route("/opportunity/create", methods=["POST"])
-def opportunity_create():
-    # Create a lightweight opportunity record linked to a client
-    client_name = request.form.get("client_name") or session.get("current_client_name") or "Cliente"
-    client_email = ""
-    now = datetime.now()
-    order_id = now.strftime("%Y%m%d-%H%M%S")
-    opportunity = {
-        "order_id": order_id,
-        "client_name": client_name,
-        "client_email": client_email,
-        "created_at": now.isoformat(),
-        "items": [],
-        "total": 0.0,
-        "state": "Oportunidad",
-    }
-    try:
-        with open(os.path.join(ORDERS_DIR, f"{order_id}.json"), "w", encoding="utf-8") as f:
-            json.dump(opportunity, f, ensure_ascii=False, indent=2)
-        session["current_opportunity_id"] = order_id
-        flash("Oportunidad creada", "success")
-    except Exception:
-        flash("No se pudo crear la oportunidad", "error")
-    return redirect(url_for("products"))
-
-
-@app.route("/opportunity/cancel", methods=["POST"])
-def opportunity_cancel():
-    opp_id = session.pop("current_opportunity_id", None)
-    if opp_id:
-        opp_path = os.path.join(ORDERS_DIR, f"{opp_id}.json")
-        if os.path.exists(opp_path):
-            try:
-                with open(opp_path, "r", encoding="utf-8") as f:
-                    opp = json.load(f)
-                opp["state"] = "Cancelada"
-                with open(opp_path, "w", encoding="utf-8") as f:
-                    json.dump(opp, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
-        flash("Oportunidad cancelada", "success")
-    else:
-        flash("No hay oportunidad activa", "error")
-    return redirect(url_for("products"))
 
 
 # Clients CRUD (simple JSON backend)
@@ -615,17 +626,6 @@ def products():
     df = load_products()
     q = request.args.get("q", "").strip().lower()
     client_query = request.args.get("client", "").strip()
-    # If a client name is provided, try to activate it
-    if client_query:
-        clients = load_clients()
-        found = next((c for c in clients if c.get("name", "").strip().lower() == client_query.lower()), None)
-        if found:
-            session["current_client_id"] = found.get("id")
-            session["current_client_name"] = found.get("name")
-            session["current_client_margin"] = found.get("default_margin", 20.0)
-            session.modified = True
-        else:
-            flash("Cliente no encontrado", "error")
     # Prefer margin from query, else from current client, else 20
     margin = request.args.get("margin")
     if margin is None:
@@ -647,10 +647,30 @@ def products():
     )
 
 
+@app.route("/order/new")
+def order_new():
+    # Clear current client context for a fresh order
+    for key in ("current_client_id", "current_client_name", "current_client_margin", "current_client_email"):
+        session.pop(key, None)
+    session.modified = True
+    return redirect(url_for("products"))
+
+
 # Simple pipeline view from saved orders
 @app.route("/pipeline")
 def pipeline_view():
-    columns = {"Oportunidad": [], "Pedido": [], "Remito": [], "Enviado": [], "Cobrado": []}
+    columns = {"Pedido": [], "Enviado": [], "Entregado (A cobrar)": [], "Cobrado": []}
+    # Optional filters
+    month_q = request.args.get("month", "").strip()
+    day_q = request.args.get("day", "").strip()
+    try:
+        month_sel = int(month_q) if month_q else None
+    except ValueError:
+        month_sel = None
+    try:
+        day_sel = int(day_q) if day_q else None
+    except ValueError:
+        day_sel = None
     if os.path.isdir(ORDERS_DIR):
         for fname in os.listdir(ORDERS_DIR):
             if not fname.endswith(".json"):
@@ -658,15 +678,31 @@ def pipeline_view():
             try:
                 with open(os.path.join(ORDERS_DIR, fname), "r", encoding="utf-8") as f:
                     order = json.load(f)
-                state = order.get("state", "Remito")
-                columns.setdefault(state, [])
+                state = order.get("state", "Pedido")
+                # Map legacy states to current pipeline
+                if state in ("Oportunidad", "Remito"):
+                    state = "Pedido"
+                # Date filters
+                if month_sel or day_sel:
+                    created_at = order.get("created_at", "")
+                    try:
+                        dt = datetime.fromisoformat(created_at)
+                        if month_sel and dt.month != month_sel:
+                            continue
+                        if day_sel and dt.day != day_sel:
+                            continue
+                    except Exception:
+                        # If cannot parse date, skip when filtering
+                        continue
+                if state not in columns:
+                    state = "Pedido"
                 columns[state].append(order)
             except Exception:
                 continue
     # Sort each column by created_at desc
     for k in columns:
         columns[k].sort(key=lambda o: o.get("created_at", ""), reverse=True)
-    return render_template("pipeline.html", columns=columns)
+    return render_template("pipeline.html", columns=columns, month_sel=month_sel, day_sel=day_sel)
 
 
 @app.route("/pipeline/<order_id>/state", methods=["POST"])

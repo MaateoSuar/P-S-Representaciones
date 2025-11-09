@@ -29,24 +29,7 @@
     </div>
   </form>
 
-  <div class="flex items-center justify-between mb-4">
-    <div class="text-sm text-gray-500">
-      {% if session.get('current_opportunity_id') %}
-        <span class="inline-flex items-center gap-2 px-2 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-          Oportunidad activa: {{ session.get('current_opportunity_id') }}
-          <form method="post" action="{{ url_for('opportunity_cancel') }}">
-            <button type="submit" class="w-5 h-5 inline-flex items-center justify-center rounded-full border border-emerald-300 text-emerald-700 hover:bg-emerald-100" title="Cancelar">
-              ×
-            </button>
-          </form>
-        </span>
-      {% endif %}
-    </div>
-    <form method="post" action="{{ url_for('opportunity_create') }}" class="inline-flex items-end">
-      <input type="hidden" name="client_name" id="opp-client-name" value="{{ current_client_name or client }}" />
-      <button type="submit" class="px-4 py-2 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50">Crear oportunidad</button>
-    </form>
-  </div>
+  
 
   <script id="clients-data" type="application/json">{{ (clients or [])|tojson }}</script>
 
@@ -58,21 +41,23 @@
           <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Vencimiento</th>
           <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Costo</th>
           <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">P. Final</th>
+          <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">SubTotal</th>
           <th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Cant</th>
           <th class="px-4 py-2"></th>
         </tr>
       </thead>
       <tbody class="bg-white divide-y divide-gray-200" id="products-body">
         {% for p in products %}
-        <tr>
+        <tr data-unit-price="{{ '%.2f'|format(p.final_price) }}">
           <td class="px-4 py-2">{{ p.name }}</td>
           <td class="px-4 py-2 text-right">{{ p.vencimiento }}</td>
           <td class="px-4 py-2 text-right">${{ '%.2f'|format(p.cost) }}</td>
           <td class="px-4 py-2 text-right">${{ '%.2f'|format(p.final_price) }}</td>
+          <td class="px-4 py-2 text-right subtotal-cell">$0.00</td>
           <td class="px-4 py-2 text-center">
             <div class="inline-flex items-center border border-gray-300 rounded overflow-hidden">
               <button type="button" class="qty-minus px-2 h-[36px] text-gray-700 hover:bg-gray-100">−</button>
-              <input class="qty-input w-16 px-2 py-1 h-[36px] text-right focus:outline-none" type="number" min="0" value="0" />
+              <input class="qty-input w-16 px-2 py-1 h-[36px] text-center focus:outline-none" type="number" min="0" value="0" />
               <button type="button" class="qty-plus px-2 h-[36px] text-gray-700 hover:bg-gray-100">+</button>
             </div>
           </td>
@@ -125,9 +110,7 @@
         if (fetchReason === 'apply' && typeof data.margin !== 'undefined' && data.margin !== null) {
           marginInput.value = data.margin;
         }
-        // Sync hidden field for opportunity form
-        const oppHidden = document.getElementById('opp-client-name');
-        if (oppHidden) oppHidden.value = clientInput.value || data.current_client_name || '';
+        
         // Update client active label only on apply
         if (fetchReason === 'apply') {
           const clientLabel = document.getElementById('client-active-label');
@@ -137,15 +120,16 @@
           }
         }
         const rows = (data.products || []).map(p => `
-          <tr>
+          <tr data-unit-price="${Number(p.final_price ?? 0).toFixed(2)}">
             <td class="px-4 py-2">${escapeHtml(p.name ?? '')}</td>
             <td class="px-4 py-2 text-right">${escapeHtml(p.vencimiento ?? '')}</td>
             <td class="px-4 py-2 text-right">$${Number(p.cost ?? 0).toFixed(2)}</td>
             <td class="px-4 py-2 text-right">$${Number(p.final_price ?? 0).toFixed(2)}</td>
+            <td class="px-4 py-2 text-right subtotal-cell">$0.00</td>
             <td class="px-4 py-2 text-center">
               <div class="inline-flex items-center border border-gray-300 rounded overflow-hidden">
                 <button type="button" class="qty-minus px-2 h-[36px] text-gray-700 hover:bg-gray-100">−</button>
-                <input class="qty-input w-16 px-2 py-1 h-[36px] text-right focus:outline-none" type="number" min="0" value="0" />
+                <input class="qty-input w-16 px-2 py-1 h-[36px] text-center focus:outline-none" type="number" min="0" value="0" />
                 <button type="button" class="qty-plus px-2 h-[36px] text-gray-700 hover:bg-gray-100">+</button>
               </div>
             </td>
@@ -158,7 +142,7 @@
               </form>
             </td>
           </tr>`).join('');
-        tbody.innerHTML = rows || '<tr><td class="px-4 py-4 text-center text-gray-500" colspan="6">Sin resultados</td></tr>';
+        tbody.innerHTML = rows || '<tr><td class="px-4 py-4 text-center text-gray-500" colspan="7">Sin resultados</td></tr>';
         bindRowForms();
       } catch (e) {
         // opcional: mostrar error
@@ -178,8 +162,7 @@
         if (typeof data.margin !== 'undefined' && data.margin !== null) {
           marginInput.value = data.margin;
         }
-        const oppHidden = document.getElementById('opp-client-name');
-        if (oppHidden) oppHidden.value = name;
+        
         const clientLabel = document.getElementById('client-active-label');
         if (clientLabel) clientLabel.textContent = name ? `Cliente activo: ${name}` : '';
         // normalize input to resolved name (proper casing)
@@ -317,14 +300,26 @@
         const minus = row ? row.querySelector('.qty-minus') : null;
         const plus = row ? row.querySelector('.qty-plus') : null;
         const input = row ? row.querySelector('.qty-input') : null;
+        const subtotalCell = row ? row.querySelector('.subtotal-cell') : null;
+        const unit = row ? parseFloat(row.getAttribute('data-unit-price') || '0') : 0;
+        const updateSubtotal = () => {
+          if (!subtotalCell || !input) return;
+          const qty = Math.max(0, parseInt(input.value || '0', 10));
+          subtotalCell.textContent = '$' + (unit * qty).toFixed(2);
+        };
         if (minus && input) minus.addEventListener('click', () => {
           const val = Math.max(0, parseInt(input.value || '0', 10) - 1);
           input.value = String(val);
+          updateSubtotal();
         });
         if (plus && input) plus.addEventListener('click', () => {
           const val = Math.max(0, parseInt(input.value || '0', 10) + 1);
           input.value = String(val);
+          updateSubtotal();
         });
+        if (input) input.addEventListener('input', updateSubtotal);
+        // initialize subtotal display
+        updateSubtotal();
       });
       document.querySelectorAll('.row-add-form .add-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -332,6 +327,7 @@
           if (!formEl) return;
           const row = formEl.closest('tr');
           const qtyEl = row ? row.querySelector('.qty-input') : null;
+          const subtotalCell = row ? row.querySelector('.subtotal-cell') : null;
           const qty = parseInt(qtyEl && qtyEl.value ? qtyEl.value : '0', 10);
           if (!qty || qty < 1) { btn.classList.add('ring-2','ring-red-400'); setTimeout(()=>btn.classList.remove('ring-2','ring-red-400'), 400); return; }
           const formData = new FormData(formEl);
@@ -342,18 +338,23 @@
               const data = await res.json();
               if (data && typeof data.cart_count !== 'undefined') {
                 if (navBadge) {
-                  navBadge.textContent = data.cart_count;
-                  if (data.cart_count > 0) {
-                    navBadge.classList.remove('hidden');
-                    navBadge.classList.add('inline-flex');
+                  const count = data.cart_count;
+                  navBadge.textContent = count;
+                  if (count > 0) {
+                    // Apply full badge styling exactly as in layout when there are items
+                    navBadge.className = 'absolute -top-1 -right-1 inline-flex items-center justify-center text-[11px] font-medium w-5 h-5 rounded-full bg-emerald-600 text-white shadow ring-2 ring-white';
                     // subtle bounce animation
                     navBadge.classList.add('animate-bounce');
                     setTimeout(()=> navBadge.classList.remove('animate-bounce'), 600);
+                  } else {
+                    // Hide when no items
+                    navBadge.className = 'hidden';
                   }
                 }
               }
               // reset qty to 0 after adding
               if (qtyEl) qtyEl.value = '0';
+              if (subtotalCell) subtotalCell.textContent = '$0.00';
             }
           } catch(_) {}
         });

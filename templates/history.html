@@ -3,42 +3,81 @@
 <div class="bg-white rounded-lg shadow p-6">
   <div class="flex items-center justify-between mb-4">
     <h2 class="text-xl font-semibold text-gray-800">Historial de Remitos</h2>
-    <a class="text-emerald-700" href="{{ url_for('products') }}">+ Nueva venta</a>
+    <div class="flex items-center gap-3">
+      <form method="get" action="{{ url_for('history') }}" class="relative">
+        <input id="history-q" type="text" name="q" value="{{ q or '' }}" placeholder="Buscar cliente..." class="input-field pl-9 pr-3 py-2 rounded w-64" autocomplete="off" />
+        <button type="submit" class="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" title="Buscar">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 110-15 7.5 7.5 0 010 15z" />
+          </svg>
+        </button>
+      </form>
+      <a class="text-emerald-700" href="{{ url_for('products') }}">+ Nueva venta</a>
+    </div>
   </div>
 
-  {% if not orders %}
-    <p class="text-gray-600">Aún no hay remitos generados.</p>
-  {% else %}
-    <div class="overflow-x-auto">
-      <table class="min-w-full divide-y divide-gray-200 table-striped">
-        <thead class="bg-gray-50">
-          <tr>
-            <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Nº</th>
-            <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Fecha</th>
-            <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
-            <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
-            <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Remito</th>
-          </tr>
-        </thead>
-        <tbody class="bg-white divide-y divide-gray-200">
-          {% for o in orders %}
-          <tr>
-            <td class="px-4 py-2">{{ o.order_id }}</td>
-            <td class="px-4 py-2">{{ o.created_at[:19].replace('T',' ') if o.created_at }}</td>
-            <td class="px-4 py-2">{{ o.client_name }}</td>
-            <td class="px-4 py-2 text-right">${{ '%.2f'|format(o.total) }}</td>
-            <td class="px-4 py-2 text-right">
-              {% if o.pdf_name %}
-                <a class="text-emerald-700" href="{{ url_for('download_remito', filename=o.pdf_name) }}">Descargar</a>
-              {% else %}
-                —
-              {% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% endif %}
+  <div id="history-results">
+    {% if not orders %}
+      <p class="text-gray-600">Aún no hay remitos generados.</p>
+    {% else %}
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200 table-striped">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Nº</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Fecha</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
+              <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
+              <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Remito</th>
+            </tr>
+          </thead>
+          <tbody class="bg-white divide-y divide-gray-200">
+            {% for o in orders %}
+            <tr>
+              <td class="px-4 py-2">{{ o.order_id }}</td>
+              <td class="px-4 py-2">{{ o.created_display or '' }}</td>
+              <td class="px-4 py-2">{{ o.client_name }}</td>
+              <td class="px-4 py-2 text-right">${{ '%.2f'|format(o.total) }}</td>
+              <td class="px-4 py-2 text-right">
+                {% if o.pdf_name %}
+                  <a class="text-emerald-700" href="{{ url_for('download_remito', filename=o.pdf_name) }}">Descargar</a>
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </div>
 </div>
+<script>
+  (function(){
+    const input = document.getElementById('history-q');
+    const results = document.getElementById('history-results');
+    if (!input || !results) return;
+    let t;
+    function debounceFetch(){
+      clearTimeout(t);
+      t = setTimeout(async () => {
+        const q = input.value || '';
+        try {
+          const params = new URLSearchParams();
+          if (q) params.set('q', q);
+          const res = await fetch(`${location.pathname}?${params.toString()}`, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+          if (!res.ok) return;
+          const html = await res.text();
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const newResults = doc.getElementById('history-results');
+          if (newResults) {
+            results.innerHTML = newResults.innerHTML;
+          }
+        } catch(_) {}
+      }, 200);
+    }
+    input.addEventListener('input', debounceFetch);
+  })();
+</script>
 {% endblock %}
