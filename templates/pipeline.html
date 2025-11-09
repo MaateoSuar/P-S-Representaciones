@@ -1,0 +1,31 @@
+{% extends 'layout.html' %}
+{% block content %}
+<h1 class="text-2xl font-semibold text-gray-800 mb-6">Pipeline de Ventas</h1>
+<div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+  {% for col in ['Oportunidad','Pedido','Remito','Enviado','Cobrado'] %}
+  <div class="bg-white rounded-lg shadow p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-semibold text-emerald-800">{{ col }}</h2>
+      <span class="text-xs text-gray-500">{{ (columns[col]|length) if columns[col] else 0 }}</span>
+    </div>
+    <div class="space-y-3">
+      {% for o in columns[col] %}
+      <div class="border border-gray-200 rounded-lg p-3">
+        <div class="text-gray-800 font-medium">{{ o.client_name or 'Cliente' }}</div>
+        <div class="text-xs text-gray-500">{{ o.created_at[:16].replace('T',' ') }}</div>
+        <div class="text-sm mt-1">Total: ${{ '%.2f'|format(o.total) }}</div>
+        <form method="post" action="{{ url_for('pipeline_set_state', order_id=o.order_id) }}" class="mt-2">
+          <select name="state" class="w-full rounded border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            {% for opt in ['Oportunidad','Pedido','Remito','Enviado','Cobrado'] %}
+              <option value="{{ opt }}" {% if opt==col %}selected{% endif %}>{{ opt }}</option>
+            {% endfor %}
+          </select>
+          <button class="mt-2 w-full px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-sm" type="submit">Actualizar</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

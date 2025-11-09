@@ -10,16 +10,29 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body class="bg-gray-50 font-poppins">
+  {% if session.get('logged_in') %}
   <header class="fixed top-0 left-0 right-0 bg-white shadow z-10">
     <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
       <a href="{{ url_for('dashboard') }}" class="text-emerald-700 font-semibold">Pablo y Sergio Representaciones</a>
       <nav class="space-x-4">
+        <a class="text-gray-600 hover:text-emerald-700" href="{{ url_for('clients_list') }}">Clientes</a>
         <a class="text-gray-600 hover:text-emerald-700" href="{{ url_for('products') }}">Productos</a>
-        <a class="text-gray-600 hover:text-emerald-700" href="{{ url_for('cart_view') }}">Carrito</a>
+        <a class="relative inline-flex items-center pr-4 text-gray-600 hover:text-emerald-700" href="{{ url_for('cart_view') }}">
+          Carrito
+          {% if cart_count and cart_count > 0 %}
+            <span id="nav-cart-badge" class="absolute -top-1 -right-1 inline-flex items-center justify-center text-[11px] font-medium w-5 h-5 rounded-full bg-emerald-600 text-white shadow ring-2 ring-white">{{ cart_count }}</span>
+          {% else %}
+            <span id="nav-cart-badge" class="hidden"></span>
+          {% endif %}
+        </a>
         <a class="text-gray-600 hover:text-emerald-700" href="{{ url_for('history') }}">Historial</a>
+        <a class="text-gray-600 hover:text-emerald-700" href="{{ url_for('pipeline_view') }}">Pipeline</a>
+        <a id="logout-link" class="text-gray-600 hover:text-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 transition"
+           href="{{ url_for('logout') }}" title="Cerrar sesión">Salir</a>
       </nav>
     </div>
   </header>
+  {% endif %}
   <main class="pt-20">
     <div class="max-w-7xl mx-auto px-4 py-6">
       {% with messages = get_flashed_messages(with_categories=true) %}
@@ -34,5 +47,60 @@
       {% block content %}{% endblock %}
     </div>
   </main>
+
+  <!-- Confirm Modal -->
+  <div id="confirm-overlay" class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50">
+    <div class="bg-white w-full max-w-md rounded-lg shadow-xl overflow-hidden">
+      <div class="px-5 py-4 border-b border-gray-100">
+        <h3 id="confirm-title" class="text-lg font-semibold text-gray-800">Confirmar</h3>
+      </div>
+      <div class="px-5 py-4">
+        <p id="confirm-message" class="text-gray-600">¿Seguro?</p>
+      </div>
+      <div class="px-5 py-4 bg-gray-50 flex items-center justify-end gap-2">
+        <button id="confirm-cancel" class="px-4 py-2 rounded border border-gray-300 text-gray-700 hover:bg-gray-100">Cancelar</button>
+        <button id="confirm-accept" class="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      const overlay = document.getElementById('confirm-overlay');
+      const titleEl = document.getElementById('confirm-title');
+      const msgEl = document.getElementById('confirm-message');
+      const cancelBtn = document.getElementById('confirm-cancel');
+      const acceptBtn = document.getElementById('confirm-accept');
+      let onOk = null;
+      function openConfirm({title='Confirmar', message='¿Seguro?', okText='Confirmar', okColor='red'}={}){
+        titleEl.textContent = title;
+        msgEl.textContent = message;
+        acceptBtn.textContent = okText;
+        acceptBtn.className = `px-4 py-2 rounded bg-${okColor}-600 hover:bg-${okColor}-700 text-white`;
+        overlay.classList.remove('hidden');
+        setTimeout(()=>overlay.classList.add('flex'),0);
+      }
+      function closeConfirm(){
+        overlay.classList.add('hidden');
+        overlay.classList.remove('flex');
+        onOk = null;
+      }
+      cancelBtn.addEventListener('click', closeConfirm);
+      overlay.addEventListener('click', (e)=>{ if(e.target===overlay) closeConfirm(); });
+      document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeConfirm(); });
+      acceptBtn.addEventListener('click', ()=>{ if (onOk) onOk(); closeConfirm(); });
+      window.confirmAction = function(opts, ok){ onOk = ok; openConfirm(opts); };
+
+      // Logout link -> modal
+      const logout = document.getElementById('logout-link');
+      if (logout){
+        logout.addEventListener('click', function(e){
+          e.preventDefault();
+          const href = this.getAttribute('href');
+          window.confirmAction({ title: 'Cerrar sesión', message: '¿Seguro que querés cerrar sesión?', okText: 'Cerrar sesión', okColor:'red' }, ()=>{ window.location.href = href; });
+        });
+      }
+    })();
+  </script>
 </body>
 </html>

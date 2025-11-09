@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, date
 from flask import Flask, render_template, request, redirect, url_for, session, send_from_directory, flash, jsonify
 import pandas as pd
 from reportlab.lib.pagesizes import A4
@@ -7,6 +7,9 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from io import BytesIO
+import json
+import smtplib
+from email.message import EmailMessage
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret-change-me")
 DATA_CSV_PATH = os.environ.get("PRODUCTS_CSV", os.path.join(os.path.dirname(__file__), "data", "products.csv"))
@@ -20,6 +23,62 @@ PDF_DIR = os.path.join(BASE_DIR, "pdfs")
 ORDERS_DIR = os.path.join(BASE_DIR, "orders")
 os.makedirs(PDF_DIR, exist_ok=True)
 os.makedirs(ORDERS_DIR, exist_ok=True)
+
+# Simple JSON persistence for clients
+CLIENTS_PATH = os.path.join(BASE_DIR, "data", "clients.json")
+os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
+
+def load_clients():
+    if not os.path.exists(CLIENTS_PATH):
+        return []
+    try:
+        with open(CLIENTS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_clients(clients):
+    with open(CLIENTS_PATH, "w", encoding="utf-8") as f:
+        json.dump(clients, f, ensure_ascii=False, indent=2)
+
+
+def _safe_filename(text: str) -> str:
+    allowed = "-_. ()abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    return "".join(ch if ch in allowed else "_" for ch in text).strip()
+
+# Single-user login credentials (can be overridden via environment variables)
+LOGIN_USER = os.environ.get("APP_LOGIN_USER", "asd")
+LOGIN_PASS = os.environ.get("APP_LOGIN_PASS", "asd")
+
+
+@app.before_request
+def require_login():
+    # Allow access to login page and static files without authentication
+    if request.endpoint in ("login", "static"):
+        return
+    if not session.get("logged_in"):
+        return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        if username == LOGIN_USER and password == LOGIN_PASS:
+            session.clear()
+            session["logged_in"] = True
+            session["user"] = username
+            return redirect(url_for("dashboard"))
+        else:
+            flash("Usuario o contraseña incorrectos", "error")
+    return render_template("login.html")
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 def load_products() -> pd.DataFrame:
@@ -63,40 +122,85 @@ def save_cart(cart):
     session.modified = True
 
 
+@app.context_processor
+def inject_globals():
+    cart = session.get("cart", [])
+    return {
+        "cart_count": sum(int(i.get("qty", 0)) for i in cart),
+        "current_client_name": session.get("current_client_name"),
+        "current_client_email": session.get("current_client_email"),
+    }
+
+
 @app.route("/")
 def dashboard():
     df = load_products()
+    clients = load_clients()
+    # Compute stats from orders directory
+    ventas_hoy = 0.0
+    total_margin_value = 0.0
+    total_sales_value = 0.0
+    today_str = date.today().isoformat()
+    if os.path.isdir(ORDERS_DIR):
+        for fname in os.listdir(ORDERS_DIR):
+            if not fname.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(ORDERS_DIR, fname), "r", encoding="utf-8") as f:
+                    order = json.load(f)
+                created = order.get("created_at", "")
+                if created.startswith(today_str):
+                    ventas_hoy += float(order.get("total", 0.0))
+                # Margin computation per item
+                for it in order.get("items", []):
+                    qty = float(it.get("qty", 0))
+                    price = float(it.get("final_price", 0))
+                    cost = float(it.get("cost", 0))
+                    total_sales_value += price * qty
+                    total_margin_value += max(price - cost, 0) * qty
+            except Exception:
+                continue
+    margen_prom = (total_margin_value / total_sales_value * 100) if total_sales_value > 0 else 0.0
     stats = {
         "productos": len(df),
-        "clientes": 0,
-        "ventas_hoy": 0,
-        "margen_prom": 0,
+        "clientes": len(clients),
+        "ventas_hoy": round(ventas_hoy, 2),
+        "margen_prom": round(margen_prom, 1),
     }
     return render_template("dashboard.html", stats=stats)
 
 
-@app.route("/products")
-def products():
-    df = load_products()
-    q = request.args.get("q", "").strip().lower()
-    margin = float(request.args.get("margin", "20") or 0)
-    if q:
-        df = df[df["name"].str.lower().str.contains(q)]
-    df = df.copy()
-    df["final_price"] = (df["cost"] * (1 + margin / 100)).round(2)
-    return render_template("products.html", products=df.to_dict(orient="records"), margin=margin, q=q)
+ 
 
 
 @app.route("/api/products")
 def api_products():
     df = load_products()
     q = request.args.get("q", "").strip().lower()
-    margin = float(request.args.get("margin", "20") or 0)
+    client_query = request.args.get("client", "").strip()
+    # Optionally set client from API for dynamic updates
+    if client_query:
+        clients = load_clients()
+        found = next((c for c in clients if c.get("name", "").strip().lower() == client_query.lower()), None)
+        if found:
+            session["current_client_id"] = found.get("id")
+            session["current_client_name"] = found.get("name")
+            session["current_client_margin"] = found.get("default_margin", 20.0)
+            session["current_client_email"] = found.get("email", "")
+            session.modified = True
+    margin = request.args.get("margin")
+    if margin is None:
+        margin = session.get("current_client_margin", 20.0)
+    margin = float(margin or 0)
     if q:
         df = df[df["name"].str.lower().str.contains(q)]
     df = df.copy()
     df["final_price"] = (df["cost"] * (1 + margin / 100)).round(2)
-    return jsonify({"products": df.to_dict(orient="records")})
+    return jsonify({
+        "products": df.to_dict(orient="records"),
+        "margin": margin,
+        "current_client_name": session.get("current_client_name"),
+    })
 
 
 @app.route("/cart")
@@ -138,6 +242,29 @@ def cart_add():
     if not merged:
         cart.append(item)
     save_cart(cart)
+    # AJAX support: if client expects JSON, return cart status
+    wants_json = (
+        "application/json" in (request.headers.get("Accept", ""))
+        or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        or request.form.get("ajax") == "1"
+        or (request.headers.get("Referer") and "/products" in request.headers.get("Referer"))
+    )
+    # If there is an active opportunity, promote it to 'Pedido'
+    opp_id = session.get("current_opportunity_id")
+    if opp_id:
+        opp_path = os.path.join(ORDERS_DIR, f"{opp_id}.json")
+        if os.path.exists(opp_path):
+            try:
+                with open(opp_path, "r", encoding="utf-8") as f:
+                    opp = json.load(f)
+                opp["state"] = "Pedido"
+                with open(opp_path, "w", encoding="utf-8") as f:
+                    json.dump(opp, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+    if wants_json:
+        count = sum(int(i.get("qty", 0)) for i in cart)
+        return jsonify({"ok": True, "cart_count": count})
     return redirect(url_for("cart_view"))
 
 
@@ -146,6 +273,21 @@ def cart_clear():
     save_cart([])
     return redirect(url_for("cart_view"))
 
+
+@app.route("/cart/remove", methods=["POST"])
+def cart_remove():
+    try:
+        idx = int(request.form.get("index", "-1"))
+    except ValueError:
+        idx = -1
+    cart = get_cart()
+    if 0 <= idx < len(cart):
+        cart.pop(idx)
+        save_cart(cart)
+        flash("Item eliminado", "success")
+    else:
+        flash("No se pudo eliminar el item", "error")
+    return redirect(url_for("cart_view"))
 
 @app.route("/checkout", methods=["POST"]) 
 def checkout():
@@ -156,10 +298,13 @@ def checkout():
     client_name = request.form.get("client_name", "Cliente")
     client_email = request.form.get("client_email", "")
     now = datetime.now()
-    order_id = now.strftime("%Y%m%d-%H%M%S")
+    # Reuse existing opportunity id if present
+    order_id = session.get("current_opportunity_id") or now.strftime("%Y%m%d-%H%M%S")
     total = sum(item["final_price"] * item["qty"] for item in cart)
 
     # Save a simple order record
+    # Determine pipeline state
+    state = "Remito"  # after checkout we consider remito generated
     order = {
         "order_id": order_id,
         "client_name": client_name,
@@ -167,17 +312,38 @@ def checkout():
         "created_at": now.isoformat(),
         "items": cart,
         "total": round(total, 2),
+        "state": state,
     }
-    import json
     with open(os.path.join(ORDERS_DIR, f"{order_id}.json"), "w", encoding="utf-8") as f:
         json.dump(order, f, ensure_ascii=False, indent=2)
 
     # Generate PDF remito
-    pdf_path = os.path.join(PDF_DIR, f"remito-{order_id}.pdf")
+    client_part = _safe_filename(client_name) or "Cliente"
+    pdf_filename = f"Remito - {client_part} - {order_id}.pdf"
+    pdf_path = os.path.join(PDF_DIR, pdf_filename)
     generate_pdf_remito(pdf_path, order)
+    # update order with pdf filename for later use
+    try:
+        ofile = os.path.join(ORDERS_DIR, f"{order_id}.json")
+        with open(ofile, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        saved["pdf_filename"] = pdf_filename
+        with open(ofile, "w", encoding="utf-8") as f:
+            json.dump(saved, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
-    # Clear cart
+    # Optional email automation if SMTP configured and email provided
+    if client_email and os.environ.get("SMTP_HOST"):
+        try:
+            send_remito_email(client_email, pdf_path, order)
+            flash("Remito enviado por email", "success")
+        except Exception:
+            flash("No se pudo enviar el email del remito", "error")
+
+    # Clear cart and current opportunity
     save_cart([])
+    session.pop("current_opportunity_id", None)
 
     return redirect(url_for("download_remito", filename=os.path.basename(pdf_path)))
 
@@ -195,11 +361,11 @@ def generate_pdf_remito(pdf_path: str, order: dict):
 
     y = height - margin
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(margin, y, "Remito / Presupuesto - Pablo y Sergio Representaciones")
+    c.drawString(margin, y, f"Remito: {order.get('client_name','')} - Nº {order['order_id']}")
     y -= 10 * mm
 
     c.setFont("Helvetica", 10)
-    c.drawString(margin, y, f"Nº: {order['order_id']}")
+    c.drawString(margin, y, "Pablo y Sergio Representaciones")
     y -= 6 * mm
     c.drawString(margin, y, f"Fecha: {order['created_at'][:19].replace('T', ' ')}")
     y -= 6 * mm
@@ -256,6 +422,35 @@ def generate_pdf_remito(pdf_path: str, order: dict):
     c.save()
 
 
+def send_remito_email(to_email: str, pdf_path: str, order: dict):
+    host = os.environ.get("SMTP_HOST")
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    user = os.environ.get("SMTP_USER")
+    password = os.environ.get("SMTP_PASS")
+    sender = os.environ.get("SMTP_FROM", user)
+    if not (host and user and password and sender):
+        raise RuntimeError("SMTP no configurado correctamente")
+
+    msg = EmailMessage()
+    msg["Subject"] = f"Remito {order['order_id']}"
+    msg["From"] = sender
+    msg["To"] = to_email
+    body = (
+        f"Hola {order.get('client_name','')},\n\n"
+        f"Adjuntamos el remito {order['order_id']} por un total de ${order['total']:.2f}.\n\n"
+        f"Saludos."
+    )
+    msg.set_content(body)
+    with open(pdf_path, "rb") as f:
+        data = f.read()
+    msg.add_attachment(data, maintype="application", subtype="pdf", filename=os.path.basename(pdf_path))
+
+    with smtplib.SMTP(host, port) as s:
+        s.starttls()
+        s.login(user, password)
+        s.send_message(msg)
+
+
 @app.route("/remitos/<path:filename>")
 def download_remito(filename):
     return send_from_directory(PDF_DIR, filename, as_attachment=True)
@@ -278,8 +473,14 @@ def history():
                 created_at = data.get("created_at", "")
                 client_name = data.get("client_name", "")
                 total = data.get("total", 0)
-                pdf_name = f"remito-{order_id}.pdf"
-                pdf_exists = os.path.exists(os.path.join(PDF_DIR, pdf_name))
+                # Prefer stored filename, else fallback to old naming
+                pdf_name = data.get("pdf_filename")
+                if pdf_name:
+                    pdf_exists = os.path.exists(os.path.join(PDF_DIR, pdf_name))
+                else:
+                    legacy = f"remito-{order_id}.pdf"
+                    pdf_exists = os.path.exists(os.path.join(PDF_DIR, legacy))
+                    pdf_name = legacy if pdf_exists else None
                 orders.append({
                     "order_id": order_id,
                     "created_at": created_at,
@@ -292,6 +493,199 @@ def history():
     # Sort by created_at/order_id desc
     orders.sort(key=lambda x: (x.get("created_at", ""), x.get("order_id", "")), reverse=True)
     return render_template("history.html", orders=orders)
+
+
+@app.route("/opportunity/create", methods=["POST"])
+def opportunity_create():
+    # Create a lightweight opportunity record linked to a client
+    client_name = request.form.get("client_name") or session.get("current_client_name") or "Cliente"
+    client_email = ""
+    now = datetime.now()
+    order_id = now.strftime("%Y%m%d-%H%M%S")
+    opportunity = {
+        "order_id": order_id,
+        "client_name": client_name,
+        "client_email": client_email,
+        "created_at": now.isoformat(),
+        "items": [],
+        "total": 0.0,
+        "state": "Oportunidad",
+    }
+    try:
+        with open(os.path.join(ORDERS_DIR, f"{order_id}.json"), "w", encoding="utf-8") as f:
+            json.dump(opportunity, f, ensure_ascii=False, indent=2)
+        session["current_opportunity_id"] = order_id
+        flash("Oportunidad creada", "success")
+    except Exception:
+        flash("No se pudo crear la oportunidad", "error")
+    return redirect(url_for("products"))
+
+
+@app.route("/opportunity/cancel", methods=["POST"])
+def opportunity_cancel():
+    opp_id = session.pop("current_opportunity_id", None)
+    if opp_id:
+        opp_path = os.path.join(ORDERS_DIR, f"{opp_id}.json")
+        if os.path.exists(opp_path):
+            try:
+                with open(opp_path, "r", encoding="utf-8") as f:
+                    opp = json.load(f)
+                opp["state"] = "Cancelada"
+                with open(opp_path, "w", encoding="utf-8") as f:
+                    json.dump(opp, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+        flash("Oportunidad cancelada", "success")
+    else:
+        flash("No hay oportunidad activa", "error")
+    return redirect(url_for("products"))
+
+
+# Clients CRUD (simple JSON backend)
+@app.route("/clients")
+def clients_list():
+    q = request.args.get("q", "").strip().lower()
+    clients = load_clients()
+    if q:
+        clients = [c for c in clients if q in c.get("name", "").lower() or q in c.get("zone", "").lower()]
+    return render_template("clients_list.html", clients=clients, q=q)
+
+
+@app.route("/clients/new", methods=["GET", "POST"])
+def clients_new():
+    if request.method == "POST":
+        clients = load_clients()
+        new_id = (max([c.get("id", 0) for c in clients]) + 1) if clients else 1
+        client = {
+            "id": new_id,
+            "name": request.form.get("name", "").strip(),
+            "zone": request.form.get("zone", "").strip(),
+            "email": request.form.get("email", "").strip(),
+            "phone": request.form.get("phone", "").strip(),
+            "default_margin": float(request.form.get("default_margin", "20") or 20),
+            "notes": request.form.get("notes", "").strip(),
+            "created_at": datetime.now().isoformat(),
+        }
+        clients.append(client)
+        save_clients(clients)
+        flash("Cliente creado", "success")
+        return redirect(url_for("clients_list"))
+    return render_template("clients_form.html", client=None)
+
+
+@app.route("/clients/<int:cid>/edit", methods=["GET", "POST"])
+def clients_edit(cid: int):
+    clients = load_clients()
+    client = next((c for c in clients if c.get("id") == cid), None)
+    if not client:
+        flash("Cliente no encontrado", "error")
+        return redirect(url_for("clients_list"))
+    if request.method == "POST":
+        client["name"] = request.form.get("name", client["name"]).strip()
+        client["zone"] = request.form.get("zone", client.get("zone", "")).strip()
+        client["email"] = request.form.get("email", client.get("email", "")).strip()
+        client["phone"] = request.form.get("phone", client.get("phone", "")).strip()
+        client["default_margin"] = float(request.form.get("default_margin", client.get("default_margin", 20)))
+        client["notes"] = request.form.get("notes", client.get("notes", "")).strip()
+        save_clients(clients)
+        flash("Cliente actualizado", "success")
+        return redirect(url_for("clients_list"))
+    return render_template("clients_form.html", client=client)
+
+
+@app.route("/clients/<int:cid>/use", methods=["POST"]) 
+def clients_use(cid: int):
+    clients = load_clients()
+    client = next((c for c in clients if c.get("id") == cid), None)
+    if not client:
+        flash("Cliente no encontrado", "error")
+        return redirect(url_for("clients_list"))
+    session["current_client_id"] = cid
+    session["current_client_name"] = client.get("name")
+    session["current_client_margin"] = client.get("default_margin", 20.0)
+    session["current_client_email"] = client.get("email", "")
+    session.modified = True
+    flash(f"Cliente activo: {client.get('name')}", "success")
+    return redirect(url_for("products"))
+
+
+# Apply client default margin on products list if available
+@app.route("/products")
+def products():
+    df = load_products()
+    q = request.args.get("q", "").strip().lower()
+    client_query = request.args.get("client", "").strip()
+    # If a client name is provided, try to activate it
+    if client_query:
+        clients = load_clients()
+        found = next((c for c in clients if c.get("name", "").strip().lower() == client_query.lower()), None)
+        if found:
+            session["current_client_id"] = found.get("id")
+            session["current_client_name"] = found.get("name")
+            session["current_client_margin"] = found.get("default_margin", 20.0)
+            session.modified = True
+        else:
+            flash("Cliente no encontrado", "error")
+    # Prefer margin from query, else from current client, else 20
+    margin = request.args.get("margin")
+    if margin is None:
+        margin = session.get("current_client_margin", 20.0)
+    margin = float(margin or 0)
+    if q:
+        df = df[df["name"].str.lower().str.contains(q)]
+    df = df.copy()
+    df["final_price"] = (df["cost"] * (1 + margin / 100)).round(2)
+    current_client_name = session.get("current_client_name")
+    return render_template(
+        "products.html",
+        products=df.to_dict(orient="records"),
+        margin=margin,
+        q=q,
+        current_client_name=current_client_name,
+        clients=load_clients(),
+        client=client_query,
+    )
+
+
+# Simple pipeline view from saved orders
+@app.route("/pipeline")
+def pipeline_view():
+    columns = {"Oportunidad": [], "Pedido": [], "Remito": [], "Enviado": [], "Cobrado": []}
+    if os.path.isdir(ORDERS_DIR):
+        for fname in os.listdir(ORDERS_DIR):
+            if not fname.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(ORDERS_DIR, fname), "r", encoding="utf-8") as f:
+                    order = json.load(f)
+                state = order.get("state", "Remito")
+                columns.setdefault(state, [])
+                columns[state].append(order)
+            except Exception:
+                continue
+    # Sort each column by created_at desc
+    for k in columns:
+        columns[k].sort(key=lambda o: o.get("created_at", ""), reverse=True)
+    return render_template("pipeline.html", columns=columns)
+
+
+@app.route("/pipeline/<order_id>/state", methods=["POST"])
+def pipeline_set_state(order_id: str):
+    new_state = request.form.get("state", "")
+    fpath = os.path.join(ORDERS_DIR, f"{order_id}.json")
+    if not os.path.exists(fpath):
+        flash("Pedido no encontrado", "error")
+        return redirect(url_for("pipeline_view"))
+    try:
+        with open(fpath, "r", encoding="utf-8") as f:
+            order = json.load(f)
+        order["state"] = new_state
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(order, f, ensure_ascii=False, indent=2)
+        flash("Estado actualizado", "success")
+    except Exception:
+        flash("No se pudo actualizar el estado", "error")
+    return redirect(url_for("pipeline_view"))
 
 
 if __name__ == "__main__":

@@ -1,17 +1,54 @@
 {% extends 'layout.html' %}
 {% block content %}
 <div class="bg-white rounded-lg shadow p-6">
-  <form method="get" class="flex flex-col md:flex-row gap-3 items-end mb-4" id="products-filter-form" onsubmit="return false;">
-    <div class="flex-1">
-      <label class="block text-sm text-gray-600">Buscar</label>
-      <input class="input-field w-full rounded px-3 py-2" type="text" name="q" value="{{ q }}" placeholder="Nombre del producto" autocomplete="off" />
+  <form method="get" class="grid grid-cols-1 gap-3 mb-2" id="products-filter-form" onsubmit="return false;">
+    <!-- Row 1: Client full width -->
+    <div class="relative">
+      <label class="block text-sm text-gray-600">Cliente</label>
+      <input class="input-field w-full rounded px-3 py-2 h-[42px]" type="text" name="client" value="{{ current_client_name or client }}" placeholder="Escribir nombre del cliente" autocomplete="off" />
+      <div id="client-suggestions" class="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg hidden max-h-56 overflow-auto">
+        <!-- suggestions injected here -->
+      </div>
+      <div class="text-xs text-emerald-700 mt-1">
+        <span id="client-active-label">{% if current_client_name %}Cliente activo: {{ current_client_name }}{% endif %}</span>
+      </div>
     </div>
-    <div>
-      <label class="block text-sm text-gray-600">Margen %</label>
-      <input class="input-field w-28 rounded px-3 py-2" type="number" step="0.1" name="margin" value="{{ margin }}" />
+    <!-- Row 2: Buscar, Margen, Aplicar -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+      <div class="md:col-span-2">
+        <label class="block text-sm text-gray-600">Buscar</label>
+        <input class="input-field w-full rounded px-3 py-2 h-[42px]" type="text" name="q" value="{{ q }}" placeholder="Nombre del producto" autocomplete="off" />
+      </div>
+      <div class="flex items-end gap-2">
+        <div>
+          <label class="block text-sm text-gray-600">Margen %</label>
+          <input class="input-field w-28 rounded px-3 py-2 h-[42px]" type="number" step="0.1" name="margin" value="{{ margin }}" />
+        </div>
+        <button id="apply-btn" class="btn-primary px-4 py-2 h-[42px] rounded" type="submit">Aplicar</button>
+      </div>
     </div>
-    <button class="btn-primary px-4 py-2 rounded" type="submit">Aplicar</button>
   </form>
+
+  <div class="flex items-center justify-between mb-4">
+    <div class="text-sm text-gray-500">
+      {% if session.get('current_opportunity_id') %}
+        <span class="inline-flex items-center gap-2 px-2 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+          Oportunidad activa: {{ session.get('current_opportunity_id') }}
+          <form method="post" action="{{ url_for('opportunity_cancel') }}">
+            <button type="submit" class="w-5 h-5 inline-flex items-center justify-center rounded-full border border-emerald-300 text-emerald-700 hover:bg-emerald-100" title="Cancelar">
+              ×
+            </button>
+          </form>
+        </span>
+      {% endif %}
+    </div>
+    <form method="post" action="{{ url_for('opportunity_create') }}" class="inline-flex items-end">
+      <input type="hidden" name="client_name" id="opp-client-name" value="{{ current_client_name or client }}" />
+      <button type="submit" class="px-4 py-2 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50">Crear oportunidad</button>
+    </form>
+  </div>
+
+  <script id="clients-data" type="application/json">{{ (clients or [])|tojson }}</script>
 
   <div class="overflow-x-auto">
     <table class="min-w-full divide-y divide-gray-200 table-striped">
@@ -21,7 +58,7 @@
           <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Vencimiento</th>
           <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Costo</th>
           <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">P. Final</th>
-          <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Cant</th>
+          <th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Cant</th>
           <th class="px-4 py-2"></th>
         </tr>
       </thead>
@@ -32,15 +69,21 @@
           <td class="px-4 py-2 text-right">{{ p.vencimiento }}</td>
           <td class="px-4 py-2 text-right">${{ '%.2f'|format(p.cost) }}</td>
           <td class="px-4 py-2 text-right">${{ '%.2f'|format(p.final_price) }}</td>
+          <td class="px-4 py-2 text-center">
+            <div class="inline-flex items-center border border-gray-300 rounded overflow-hidden">
+              <button type="button" class="qty-minus px-2 h-[36px] text-gray-700 hover:bg-gray-100">−</button>
+              <input class="qty-input w-16 px-2 py-1 h-[36px] text-right focus:outline-none" type="number" min="0" value="0" />
+              <button type="button" class="qty-plus px-2 h-[36px] text-gray-700 hover:bg-gray-100">+</button>
+            </div>
+          </td>
           <td class="px-4 py-2 text-right">
-            <form method="post" action="{{ url_for('cart_add') }}" class="flex items-center justify-end gap-2">
+            <form method="post" action="{{ url_for('cart_add') }}" onsubmit="return false;" class="row-add-form inline-flex items-center gap-2">
               <input type="hidden" name="id" value="{{ p.id }}" />
               <input type="hidden" name="margin" value="{{ margin }}" />
-              <input class="input-field w-20 rounded px-2 py-1 text-right" type="number" name="qty" min="1" value="1" />
-              <button class="btn-primary px-3 py-1 rounded" type="submit">Agregar</button>
+              <input type="hidden" name="ajax" value="1" />
+              <button class="btn-primary px-3 py-1 h-[36px] rounded add-btn" type="button">Agregar</button>
             </form>
           </td>
-          <td class="px-4 py-2"></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -53,36 +96,70 @@
     if (!form) return;
     const qInput = form.querySelector('input[name="q"]');
     const marginInput = form.querySelector('input[name="margin"]');
+    const clientInput = form.querySelector('input[name="client"]');
     const tbody = document.getElementById('products-body');
     const cartAddUrl = "{{ url_for('cart_add') }}";
+    const navBadge = document.getElementById('nav-cart-badge');
     let timer;
+    let allClients = [];
+    try {
+      const el = document.getElementById('clients-data');
+      allClients = JSON.parse(el ? el.textContent : '[]');
+    } catch(_) { allClients = []; }
+    const suggBox = document.getElementById('client-suggestions');
+    let suggMatches = [];
+    let suggIndex = -1;
 
+    let fetchReason = 'search'; // 'search' | 'apply'
     async function fetchAndRender(){
-      const params = new URLSearchParams({
-        q: qInput.value || '',
-        margin: marginInput.value || '20'
-      });
+      const params = new URLSearchParams({ q: qInput.value || '' });
+      if (fetchReason === 'apply') {
+        params.set('margin', marginInput.value || '');
+        params.set('client', clientInput.value || '');
+      }
       try {
         const res = await fetch(`/api/products?${params.toString()}`, { headers: { 'Accept': 'application/json' } });
         if (!res.ok) return;
         const data = await res.json();
+        // Update margin only when applying
+        if (fetchReason === 'apply' && typeof data.margin !== 'undefined' && data.margin !== null) {
+          marginInput.value = data.margin;
+        }
+        // Sync hidden field for opportunity form
+        const oppHidden = document.getElementById('opp-client-name');
+        if (oppHidden) oppHidden.value = clientInput.value || data.current_client_name || '';
+        // Update client active label only on apply
+        if (fetchReason === 'apply') {
+          const clientLabel = document.getElementById('client-active-label');
+          if (clientLabel) {
+            const name = data.current_client_name || clientInput.value || '';
+            clientLabel.textContent = name ? `Cliente activo: ${name}` : '';
+          }
+        }
         const rows = (data.products || []).map(p => `
           <tr>
             <td class="px-4 py-2">${escapeHtml(p.name ?? '')}</td>
             <td class="px-4 py-2 text-right">${escapeHtml(p.vencimiento ?? '')}</td>
             <td class="px-4 py-2 text-right">$${Number(p.cost ?? 0).toFixed(2)}</td>
             <td class="px-4 py-2 text-right">$${Number(p.final_price ?? 0).toFixed(2)}</td>
+            <td class="px-4 py-2 text-center">
+              <div class="inline-flex items-center border border-gray-300 rounded overflow-hidden">
+                <button type="button" class="qty-minus px-2 h-[36px] text-gray-700 hover:bg-gray-100">−</button>
+                <input class="qty-input w-16 px-2 py-1 h-[36px] text-right focus:outline-none" type="number" min="0" value="0" />
+                <button type="button" class="qty-plus px-2 h-[36px] text-gray-700 hover:bg-gray-100">+</button>
+              </div>
+            </td>
             <td class="px-4 py-2 text-right">
-              <form method="post" action="${cartAddUrl}" class="flex items-center justify-end gap-2">
+              <form method="post" action="${cartAddUrl}" class="row-add-form inline-flex items-center gap-2">
                 <input type="hidden" name="id" value="${p.id}" />
                 <input type="hidden" name="margin" value="${marginInput.value}" />
-                <input class="input-field w-20 rounded px-2 py-1 text-right" type="number" name="qty" min="1" value="1" />
-                <button class="btn-primary px-3 py-1 rounded" type="submit">Agregar</button>
+                <input type="hidden" name="ajax" value="1" />
+                <button class="btn-primary px-3 py-1 h-[36px] rounded add-btn" type="button">Agregar</button>
               </form>
             </td>
-            <td class="px-4 py-2"></td>
           </tr>`).join('');
         tbody.innerHTML = rows || '<tr><td class="px-4 py-4 text-center text-gray-500" colspan="6">Sin resultados</td></tr>';
+        bindRowForms();
       } catch (e) {
         // opcional: mostrar error
       }
@@ -103,8 +180,137 @@
         .replace(/'/g, '&#039;');
     }
 
-    qInput.addEventListener('input', debounceFetch);
-    marginInput.addEventListener('input', debounceFetch);
+    qInput.addEventListener('input', () => { fetchReason='search'; debounceFetch(); });
+    // Do not auto-fetch on margin or client typing; suggestions only
+    clientInput.addEventListener('input', () => {
+      // build pretty suggestions
+      const q = (clientInput.value || '').toLowerCase();
+      if (!q) { suggBox.classList.add('hidden'); suggBox.innerHTML=''; return; }
+      buildSuggestions(q);
+      // no fetch here; will apply on button
+    });
+    // Apply button (form submit)
+    form.addEventListener('submit', (e)=>{ e.preventDefault(); fetchReason='apply'; fetchAndRender(); });
+    const applyBtn = document.getElementById('apply-btn');
+    if (applyBtn) applyBtn.addEventListener('click', (e)=>{ e.preventDefault(); fetchReason='apply'; fetchAndRender(); });
+    clientInput.addEventListener('change', fetchAndRender);
+    function renderSuggestions() {
+      if (!suggMatches.length) { suggBox.classList.add('hidden'); suggBox.innerHTML=''; return; }
+      suggBox.innerHTML = suggMatches.map((n, i) => `
+        <button type="button" data-index="${i}" class="sugg-item w-full text-left px-3 py-2 ${i===suggIndex ? 'bg-emerald-100' : 'hover:bg-emerald-50'}">
+          <div class="text-sm text-gray-800">${escapeHtml(n)}</div>
+        </button>
+      `).join('');
+      Array.from(suggBox.querySelectorAll('.sugg-item')).forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const idx = parseInt(btn.getAttribute('data-index'));
+          if (!isNaN(idx)) applySuggestion(idx);
+        });
+      });
+      suggBox.classList.remove('hidden');
+    }
+
+    function buildSuggestions(q){
+      suggIndex = -1;
+      suggMatches = allClients
+        .map(c => c && c.name ? c.name : '')
+        .filter(n => n && n.toLowerCase().includes(q))
+        .slice(0, 8);
+      renderSuggestions();
+    }
+
+    function applySuggestion(idx){
+      if (idx < 0 || idx >= suggMatches.length) return;
+      clientInput.value = suggMatches[idx];
+      suggBox.classList.add('hidden');
+      // do not fetch automatically; will update on Aplicar
+    }
+
+    clientInput.addEventListener('input', () => {
+      const q = (clientInput.value || '').toLowerCase();
+      if (!q) { suggBox.classList.add('hidden'); suggBox.innerHTML=''; debounceFetch(); return; }
+      buildSuggestions(q);
+      fetchReason='client';
+      debounceFetch();
+    });
+
+    clientInput.addEventListener('keydown', (e) => {
+      if (suggBox.classList.contains('hidden')) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        suggIndex = (suggIndex + 1) % suggMatches.length;
+        renderSuggestions();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        suggIndex = (suggIndex - 1 + suggMatches.length) % suggMatches.length;
+        renderSuggestions();
+      } else if (e.key === 'Enter') {
+        if (suggIndex >= 0) {
+          e.preventDefault();
+          applySuggestion(suggIndex);
+        }
+      } else if (e.key === 'Escape') {
+        suggBox.classList.add('hidden');
+      }
+    });
+    document.addEventListener('click', (e) => {
+      if (!suggBox.contains(e.target) && e.target !== clientInput) {
+        suggBox.classList.add('hidden');
+      }
+    });
+
+    function bindRowForms(){
+      // stepper handlers
+      document.querySelectorAll('.row-add-form').forEach(formEl => {
+        const row = formEl.closest('tr');
+        const minus = row ? row.querySelector('.qty-minus') : null;
+        const plus = row ? row.querySelector('.qty-plus') : null;
+        const input = row ? row.querySelector('.qty-input') : null;
+        if (minus && input) minus.addEventListener('click', () => {
+          const val = Math.max(0, parseInt(input.value || '0', 10) - 1);
+          input.value = String(val);
+        });
+        if (plus && input) plus.addEventListener('click', () => {
+          const val = Math.max(0, parseInt(input.value || '0', 10) + 1);
+          input.value = String(val);
+        });
+      });
+      document.querySelectorAll('.row-add-form .add-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const formEl = btn.closest('form');
+          if (!formEl) return;
+          const row = formEl.closest('tr');
+          const qtyEl = row ? row.querySelector('.qty-input') : null;
+          const qty = parseInt(qtyEl && qtyEl.value ? qtyEl.value : '0', 10);
+          if (!qty || qty < 1) { btn.classList.add('ring-2','ring-red-400'); setTimeout(()=>btn.classList.remove('ring-2','ring-red-400'), 400); return; }
+          const formData = new FormData(formEl);
+          formData.set('qty', String(qty));
+          try {
+            const res = await fetch(cartAddUrl, { method: 'POST', body: formData, headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } });
+            if (res.ok) {
+              const data = await res.json();
+              if (data && typeof data.cart_count !== 'undefined') {
+                if (navBadge) {
+                  navBadge.textContent = data.cart_count;
+                  if (data.cart_count > 0) {
+                    navBadge.classList.remove('hidden');
+                    navBadge.classList.add('inline-flex');
+                    // subtle bounce animation
+                    navBadge.classList.add('animate-bounce');
+                    setTimeout(()=> navBadge.classList.remove('animate-bounce'), 600);
+                  }
+                }
+              }
+              // reset qty to 0 after adding
+              if (qtyEl) qtyEl.value = '0';
+            }
+          } catch(_) {}
+        });
+      });
+    }
+
+    // initial bind for server-rendered rows
+    bindRowForms();
   })();
 </script>
 {% endblock %}

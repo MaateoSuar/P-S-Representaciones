@@ -17,6 +17,7 @@
             <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">P. Unit</th>
             <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Cantidad</th>
             <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Subtotal</th>
+            <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Acciones</th>
           </tr>
         </thead>
         <tbody class="bg-white divide-y divide-gray-200">
@@ -29,6 +30,12 @@
             <td class="px-4 py-2 text-right">${{ '%.2f'|format(item.final_price) }}</td>
             <td class="px-4 py-2 text-right">{{ item.qty }}</td>
             <td class="px-4 py-2 text-right">${{ '%.2f'|format(item.final_price * item.qty) }}</td>
+            <td class="px-4 py-2 text-right">
+              <form method="post" action="{{ url_for('cart_remove') }}" data-confirm="Eliminar este item?">
+                <input type="hidden" name="index" value="{{ loop.index0 }}" />
+                <button class="px-3 py-1.5 rounded border border-red-300 text-red-700 hover:bg-red-50" type="submit">Eliminar</button>
+              </form>
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -36,8 +43,8 @@
     </div>
 
     <div class="flex items-center justify-between mt-4">
-      <form method="post" action="{{ url_for('cart_clear') }}">
-        <button class="px-4 py-2 rounded border border-red-300 text-red-700" type="submit">Vaciar carrito</button>
+      <form method="post" action="{{ url_for('cart_clear') }}" data-confirm="¿Vaciar toda la venta?">
+        <button class="px-4 py-2 rounded border border-red-300 text-red-700 hover:bg-red-50" type="submit">Vaciar carrito</button>
       </form>
       <div class="text-right">
         <div class="text-lg font-semibold">Total: ${{ '%.2f'|format(total) }}</div>
@@ -47,16 +54,32 @@
     <form method="post" action="{{ url_for('checkout') }}" class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-3">
       <div>
         <label class="block text-sm text-gray-600">Cliente</label>
-        <input class="input-field w-full rounded px-3 py-2" type="text" name="client_name" placeholder="Nombre de la farmacia" required />
+        <input class="input-field w-full rounded px-3 py-2" type="text" name="client_name" placeholder="Nombre de la farmacia" value="{{ current_client_name or '' }}" required />
       </div>
       <div>
         <label class="block text-sm text-gray-600">Email (opcional)</label>
-        <input class="input-field w-full rounded px-3 py-2" type="email" name="client_email" placeholder="correo@cliente.com" />
+        <input class="input-field w-full rounded px-3 py-2" type="email" name="client_email" placeholder="correo@cliente.com" value="{{ current_client_email or '' }}" />
       </div>
       <div class="flex items-end justify-end">
         <button class="btn-primary px-4 py-2 rounded" type="submit">Generar Remito (PDF)</button>
       </div>
     </form>
   {% endif %}
+<script>
+  (function(){
+    // Bind modal confirmation to any form with data-confirm
+    document.querySelectorAll('form[data-confirm]').forEach(form => {
+      form.addEventListener('submit', function(e){
+        e.preventDefault();
+        const msg = this.getAttribute('data-confirm') || '¿Seguro?';
+        if (window.confirmAction) {
+          window.confirmAction({ title: 'Confirmar', message: msg, okText: 'Sí, continuar', okColor: 'red' }, ()=> this.submit());
+        } else {
+          if (confirm(msg)) this.submit();
+        }
+      });
+    });
+  })();
+  </script>
 </div>
 {% endblock %}

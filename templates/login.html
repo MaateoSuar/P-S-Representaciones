@@ -1,0 +1,85 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="min-h-[70vh] flex items-center justify-center p-4 bg-emerald-50/40 rounded-xl">
+  <div class="w-full max-w-4xl bg-white rounded-lg shadow-xl overflow-hidden flex flex-col md:flex-row border border-gray-100">
+    <!-- Left / Image & Brand -->
+    <div class="w-full md:w-1/2 bg-emerald-100/50 flex flex-col items-center justify-center p-8">
+      <div class="w-32 h-32 md:w-36 md:h-36 rounded-full border-4 border-white shadow-lg overflow-hidden mb-8 mt-2 bg-gray-200 flex items-center justify-center">
+        <div class="w-16 h-16 rounded-full bg-gray-300"></div>
+      </div>
+      <h2 class="text-2xl font-bold text-emerald-800 mb-2">Nombre de la Empresa</h2>
+      <p class="text-emerald-900/70 text-center">Sistema de gestión de ventas</p>
+      <div class="mt-8 w-full max-w-xs">
+        <div class="relative">
+          <div class="absolute inset-0 flex items-center">
+            <div class="w-full border-t border-emerald-700/30"></div>
+          </div>
+          <div class="relative flex justify-center text-sm">
+            <span class="px-2 bg-emerald-100/50 text-emerald-900/70">Acceso exclusivo</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right / Form -->
+    <div class="w-full md:w-1/2 p-8 md:p-12">
+      <h1 class="text-3xl font-bold text-emerald-900 mb-2">Iniciar sesión</h1>
+      <p class="text-gray-600 mb-8">Ingresa tus credenciales para acceder</p>
+
+      <form method="POST" action="{{ url_for('login') }}" class="space-y-6">
+        <div>
+          <label for="username" class="block text-sm font-medium text-emerald-900 mb-2">Usuario</label>
+          <div class="relative">
+            <input id="username" name="username" type="text" required
+                   class="w-full pl-4 pr-4 py-3 rounded-lg border border-gray-300 bg-gray-50 text-emerald-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                   placeholder="usuario" />
+          </div>
+        </div>
+
+        <div>
+          <label for="password" class="block text-sm font-medium text-emerald-900 mb-2">Contraseña</label>
+          <div class="relative">
+            <input id="password" name="password" type="password" required
+                   class="w-full pl-4 pr-10 py-3 rounded-lg border border-gray-300 bg-gray-50 text-emerald-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                   placeholder="••••••••" />
+            <button type="button" class="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-800/80 hover:text-emerald-900 focus:outline-none" id="togglePassword">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.644C3.423 7.51 7.36 5 12 5c4.64 0 8.577 2.51 9.964 6.678.07.214.07.43 0 .644C20.577 16.49 16.64 19 12 19c-4.64 0-8.577-2.51-9.964-6.678z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div>
+              {% for category, message in messages %}
+                <div class="text-sm px-3 py-2 rounded border {{ 'border-red-300 bg-red-50 text-red-700' if category=='error' else 'border-emerald-300 bg-emerald-50 text-emerald-800' }}">{{ message }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+
+        <button type="submit"
+                class="w-full bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold py-3 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition">
+          Ingresar
+        </button>
+
+        <div class="text-xs text-center text-gray-400">Usuario: asd — Contraseña: asd</div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+  const toggleBtn = document.getElementById('togglePassword');
+  const pwd = document.getElementById('password');
+  if (toggleBtn && pwd) {
+    toggleBtn.addEventListener('click', () => {
+      const isPwd = pwd.getAttribute('type') === 'password';
+      pwd.setAttribute('type', isPwd ? 'text' : 'password');
+    });
+  }
+</script>
+{% endblock %}

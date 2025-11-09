@@ -1,0 +1,32 @@
+[
+  {
+    "id": 1,
+    "name": "Mateo Rodríguez Suar",
+    "zone": "Plazoleta Mitre",
+    "email": "maateosuar@gmail.com",
+    "phone": "03815508346",
+    "default_margin": 29.7,
+    "notes": "El facha",
+    "created_at": "2025-11-09T11:05:26.157021"
+  },
+  {
+    "id": 2,
+    "name": "Matias Testa",
+    "zone": "Mendoza y Castro Barros",
+    "email": "tutexio@gmail.com",
+    "phone": "381332323",
+    "default_margin": 10.0,
+    "notes": "cacacaca",
+    "created_at": "2025-11-09T11:09:23.402648"
+  },
+  {
+    "id": 3,
+    "name": "Lourdes Sanchez",
+    "zone": "Loma del pene",
+    "email": "lulito@gmail.com",
+    "phone": "3816542903",
+    "default_margin": 120.0,
+    "notes": "CACACAC",
+    "created_at": "2025-11-09T11:11:51.968220"
+  }
+]
