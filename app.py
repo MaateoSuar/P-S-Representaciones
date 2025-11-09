@@ -183,11 +183,16 @@ def inject_globals():
 def dashboard():
     df = load_products()
     clients = load_clients()
-    # Compute stats from orders directory
-    ventas_hoy = 0.0
-    total_margin_value = 0.0
-    total_sales_value = 0.0
+    # Compute stats and time series from orders directory
+    from collections import defaultdict
     today_str = date.today().isoformat()
+    ventas_hoy = 0.0
+    clientes_hoy_set = set()
+    # Per-day aggregations
+    sales_by_day = defaultdict(float)
+    clients_by_day = defaultdict(set)  # sets of client names per day
+    margin_val_by_day = defaultdict(float)  # absolute margin value per day
+    sales_val_by_day = defaultdict(float)   # absolute sales value per day
     if os.path.isdir(ORDERS_DIR):
         for fname in os.listdir(ORDERS_DIR):
             if not fname.endswith(".json"):
@@ -196,46 +201,53 @@ def dashboard():
                 with open(os.path.join(ORDERS_DIR, fname), "r", encoding="utf-8") as f:
                     order = json.load(f)
                 created = order.get("created_at", "")
+                client_name = (order.get("client_name") or "").strip()
+                if len(created) >= 10:
+                    day = created[:10]
+                    total = float(order.get("total", 0.0))
+                    sales_by_day[day] += total
+                    if client_name:
+                        clients_by_day[day].add(client_name)
                 if created.startswith(today_str):
                     ventas_hoy += float(order.get("total", 0.0))
-                # Margin computation per item
+                    if client_name:
+                        clientes_hoy_set.add(client_name)
+                # Margin computation per item by day
                 for it in order.get("items", []):
                     qty = float(it.get("qty", 0))
                     price = float(it.get("final_price", 0))
                     cost = float(it.get("cost", 0))
-                    total_sales_value += price * qty
-                    total_margin_value += max(price - cost, 0) * qty
+                    margin_val = max(price - cost, 0) * qty
+                    created_day = created[:10] if len(created) >= 10 else None
+                    if created_day:
+                        margin_val_by_day[created_day] += margin_val
+                        sales_val_by_day[created_day] += price * qty
             except Exception:
                 continue
-    margen_prom = (total_margin_value / total_sales_value * 100) if total_sales_value > 0 else 0.0
+    # Today's KPI values
+    clientes_hoy = len(clientes_hoy_set)
+    sales_today_val = ventas_hoy
+    sales_today_base = sales_val_by_day.get(today_str, 0.0)
+    margin_today_val = margin_val_by_day.get(today_str, 0.0)
+    margen_prom_hoy = (margin_today_val / sales_today_base * 100) if sales_today_base > 0 else 0.0
     stats = {
-        "productos": len(df),
-        "clientes": len(clients),
-        "ventas_hoy": round(ventas_hoy, 2),
-        "margen_prom": round(margen_prom, 1),
+        "productos": len(df),  # productos en stock
+        "clientes_dia": clientes_hoy,
+        "ventas_hoy": round(sales_today_val, 2),
+        "margen_prom_hoy": round(margen_prom_hoy, 1),
     }
-    # Build last 30 days sales series
-    # Aggregate totals by date (YYYY-MM-DD) from saved orders
-    from collections import defaultdict
-    sales_by_day = defaultdict(float)
-    if os.path.isdir(ORDERS_DIR):
-        for fname in os.listdir(ORDERS_DIR):
-            if not fname.endswith(".json"):
-                continue
-            try:
-                with open(os.path.join(ORDERS_DIR, fname), "r", encoding="utf-8") as f:
-                    order = json.load(f)
-                created = order.get("created_at", "")
-                if len(created) >= 10:
-                    day = created[:10]  # YYYY-MM-DD
-                    sales_by_day[day] += float(order.get("total", 0.0))
-            except Exception:
-                continue
     # Compose chronological labels and values for last 30 days
     last_30 = [date.fromordinal(date.today().toordinal() - i) for i in range(29, -1, -1)]
     sales_labels = [f"{d.day}/{d.month}" for d in last_30]
-    sales_values = [round(sales_by_day.get(d.isoformat(), 0.0), 2) for d in last_30]
-    return render_template("dashboard.html", stats=stats, sales_labels=sales_labels, sales_values=sales_values)
+    iso_labels = [d.isoformat() for d in last_30]
+    sales_values = [round(sales_by_day.get(k, 0.0), 2) for k in iso_labels]
+    clients_values = [len(clients_by_day.get(k, set())) for k in iso_labels]
+    margin_values = []
+    for k in iso_labels:
+        base = sales_val_by_day.get(k, 0.0)
+        mv = margin_val_by_day.get(k, 0.0)
+        margin_values.append(round((mv / base * 100) if base > 0 else 0.0, 1))
+    return render_template("dashboard.html", stats=stats, sales_labels=sales_labels, sales_values=sales_values, clients_values=clients_values, margin_values=margin_values)
 
 
  
@@ -303,25 +315,6 @@ def cart_add():
     if row.empty:
         flash("Producto no encontrado", "error")
         return redirect(url_for("products"))
-
-
-@app.route("/clients/<int:cid>/delete", methods=["POST"])
-def clients_delete(cid: int):
-    clients = load_clients()
-    before = len(clients)
-    clients = [c for c in clients if c.get("id") != cid]
-    if len(clients) == before:
-        flash("Cliente no encontrado", "error")
-        return redirect(url_for("clients_list"))
-    save_clients(clients)
-    # If deleted client was active, clear selection and cart
-    if session.get("current_client_id") == cid:
-        for key in ("current_client_id", "current_client_name", "current_client_margin", "current_client_email"):
-            session.pop(key, None)
-        session["cart"] = []
-        session.modified = True
-    flash("Cliente eliminado", "success")
-    return redirect(url_for("clients_list"))
     r = row.iloc[0]
     final_price = round(float(r["cost"]) * (1 + margin / 100), 2)
     item = {

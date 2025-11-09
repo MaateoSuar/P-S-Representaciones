@@ -21,6 +21,7 @@
             <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
             <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Zona</th>
             <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Contacto</th>
+            <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Nota</th>
             <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Margen %</th>
             <th class="px-4 py-2"></th>
           </tr>
@@ -34,6 +35,7 @@
             </td>
             <td class="px-4 py-2">{{ c.zone }}</td>
             <td class="px-4 py-2">{{ c.phone }}</td>
+            <td class="px-4 py-2 max-w-xs truncate" title="{{ c.notes }}">{{ c.notes }}</td>
             <td class="px-4 py-2">{{ '%.1f'|format(c.default_margin or 0) }}%</td>
             <td class="px-4 py-2 text-right">
               <a href="{{ url_for('clients_edit', cid=c.id) }}" class="text-emerald-700 hover:underline mr-3">Editar</a>
