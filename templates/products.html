@@ -5,16 +5,19 @@
     <!-- Row 1: Client full width -->
     <div class="relative">
       <label class="block text-sm text-gray-600">Cliente</label>
-      <div class="flex gap-2">
-        <input class="input-field w-full rounded px-3 py-2 h-[42px]" type="text" name="client" value="{{ current_client_name or client }}" placeholder="Escribir nombre del cliente" autocomplete="off" />
+      <div class="flex gap-2 items-center flex-nowrap">
+        <input class="input-field flex-1 min-w-0 rounded px-3 py-2 h-[42px]" type="text" name="client" value="{{ current_client_name or client }}" placeholder="Escribir nombre del cliente" autocomplete="off" />
         <a href="{{ url_for('clients_new') }}" class="px-3 py-2 h-[42px] rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 whitespace-nowrap">Crear cliente</a>
+      </div>
+      <div class="mt-1">
+        <span id="client-active-pill" class="hidden inline-flex items-center px-2.5 py-1 rounded-full text-xs border border-emerald-200 bg-emerald-50 text-emerald-700 whitespace-nowrap">
+          Cliente Activo: <span class="ml-1 font-medium">{{ current_client_name or '' }}</span>
+        </span>
       </div>
       <div id="client-suggestions" class="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg hidden max-h-56 overflow-auto">
         <!-- suggestions injected here -->
       </div>
-      <div class="text-xs text-emerald-700 mt-1">
-        <span id="client-active-label">{% if current_client_name %}Cliente activo: {{ current_client_name }}{% endif %}</span>
-      </div>
+      
     </div>
     <!-- Row 2: Buscar, Margen, Aplicar -->
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
@@ -109,17 +112,34 @@
         const res = await fetch(`/api/products?${params.toString()}`, { headers: { 'Accept': 'application/json' } });
         if (!res.ok) return;
         const data = await res.json();
+        // Update cart badge if provided
+        if (typeof data.cart_count !== 'undefined') {
+          const count = data.cart_count;
+          if (navBadge) {
+            navBadge.textContent = count;
+            if (count > 0) {
+              navBadge.className = 'absolute -top-1 -right-1 inline-flex items-center justify-center text-[11px] font-medium w-5 h-5 rounded-full bg-emerald-600 text-white shadow ring-2 ring-white';
+            } else {
+              navBadge.className = 'hidden';
+            }
+          }
+        }
         // Update margin only when applying
         if (fetchReason === 'apply' && typeof data.margin !== 'undefined' && data.margin !== null) {
           marginInput.value = data.margin;
         }
         
-        // Update client active label only on apply
+        // Update small pill only on apply
         if (fetchReason === 'apply') {
-          const clientLabel = document.getElementById('client-active-label');
-          if (clientLabel) {
-            const name = data.current_client_name || clientInput.value || '';
-            clientLabel.textContent = name ? `Cliente activo: ${name}` : '';
+          const pill = document.getElementById('client-active-pill');
+          const name = (data.current_client_name || clientInput.value || '').trim();
+          if (pill) {
+            if (name) {
+              pill.classList.remove('hidden');
+              pill.querySelector('span').textContent = name;
+            } else {
+              pill.classList.add('hidden');
+            }
           }
         }
         const rows = (data.products || []).map(p => `
@@ -162,12 +182,31 @@
         const res = await fetch(`/api/products?${params.toString()}`, { headers: { 'Accept': 'application/json' } });
         if (!res.ok) return;
         const data = await res.json();
+        // Update cart badge if client change cleared cart
+        if (typeof data.cart_count !== 'undefined') {
+          const count = data.cart_count;
+          if (navBadge) {
+            navBadge.textContent = count;
+            if (count > 0) {
+              navBadge.className = 'absolute -top-1 -right-1 inline-flex items-center justify-center text-[11px] font-medium w-5 h-5 rounded-full bg-emerald-600 text-white shadow ring-2 ring-white';
+            } else {
+              navBadge.className = 'hidden';
+            }
+          }
+        }
         if (typeof data.margin !== 'undefined' && data.margin !== null) {
           marginInput.value = data.margin;
         }
         
-        const clientLabel = document.getElementById('client-active-label');
-        if (clientLabel) clientLabel.textContent = name ? `Cliente activo: ${name}` : '';
+        const pill = document.getElementById('client-active-pill');
+        if (pill) {
+          if (name) {
+            pill.classList.remove('hidden');
+            pill.querySelector('span').textContent = name;
+          } else {
+            pill.classList.add('hidden');
+          }
+        }
         // normalize input to resolved name (proper casing)
         if (!forcedName && data.current_client_name) clientInput.value = data.current_client_name;
       } catch(_) {}
@@ -191,30 +230,22 @@
     qInput.addEventListener('input', () => { fetchReason='search'; debounceFetch(); });
     // Do not auto-fetch on margin or client typing; suggestions only
     clientInput.addEventListener('input', () => {
-      // build pretty suggestions
+      // build pretty suggestions only; do not auto-activate client here
       const q = (clientInput.value || '').trim().toLowerCase();
       if (!q) { suggBox.classList.add('hidden'); suggBox.innerHTML=''; return; }
       buildSuggestions(q);
-      // no fetch here; will apply on button
-      // If text exactly matches an existing client, set active immediately
-      const exact = (allClients || []).find(c => (c && c.name ? c.name : '').toLowerCase() === q);
+      // will apply only on Enter or Apply
+    });
+    clientInput.addEventListener('change', () => {
+      const typed = (clientInput.value || '').trim().toLowerCase();
+      if (!typed) return;
+      const exact = (allClients || []).find(c => (c && c.name ? c.name : '').toLowerCase() === typed);
       if (exact) {
         setActiveClient(exact.name);
-      } else {
-        // If there is a single suggestion, set it as active (soft selection)
-        const candidates = (allClients || []).map(c=>c&&c.name?c.name:'').filter(n=> n && n.toLowerCase().includes(q));
-        if (candidates.length === 1) {
-          setActiveClient(candidates[0]);
-        }
       }
+      // If not exact, do not auto-apply to avoid reverting to previous client
     });
-    clientInput.addEventListener('change', setActiveClient);
-    clientInput.addEventListener('blur', () => {
-      const q = (clientInput.value || '').trim().toLowerCase();
-      if (!q) return;
-      const candidates = (allClients || []).map(c=>c&&c.name?c.name:'').filter(n=> n && n.toLowerCase().includes(q));
-      if (candidates.length > 0) setActiveClient(candidates[0]);
-    });
+    // Do not auto-apply on blur to avoid reverting to previous client
     // Apply button (form submit)
     form.addEventListener('submit', (e)=>{ e.preventDefault(); fetchReason='apply'; fetchAndRender(); });
     const applyBtn = document.getElementById('apply-btn');
@@ -333,6 +364,13 @@
           const subtotalCell = row ? row.querySelector('.subtotal-cell') : null;
           const qty = parseInt(qtyEl && qtyEl.value ? qtyEl.value : '0', 10);
           if (!qty || qty < 1) { btn.classList.add('ring-2','ring-red-400'); setTimeout(()=>btn.classList.remove('ring-2','ring-red-400'), 400); return; }
+          // Ensure client typed manually is set active before adding
+          try {
+            const typed = (clientInput && clientInput.value ? clientInput.value.trim() : '');
+            if (typed) {
+              await setActiveClient(typed);
+            }
+          } catch(_) {}
           const formData = new FormData(formEl);
           formData.set('qty', String(qty));
           try {

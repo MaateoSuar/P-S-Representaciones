@@ -29,6 +29,7 @@
               <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
               <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
               <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Remito</th>
+              <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Acciones</th>
             </tr>
           </thead>
           <tbody class="bg-white divide-y divide-gray-200">
@@ -45,6 +46,16 @@
                   —
                 {% endif %}
               </td>
+              <td class="px-4 py-2 text-right">
+                <form method="post" action="{{ url_for('history_delete') }}" class="inline" data-confirm="¿Eliminar este remito? Esta acción no se puede deshacer.">
+                  <input type="hidden" name="filename" value="{{ o.filename }}" />
+                  <button type="submit" class="text-red-600 hover:text-red-700" title="Eliminar">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5 inline-block align-middle">
+                      <path fill-rule="evenodd" d="M9 3.75A2.25 2.25 0 0 1 11.25 1.5h1.5A2.25 2.25 0 0 1 15 3.75V4.5h3.75a.75.75 0 0 1 0 1.5h-.51l-1.003 13.04A3.75 3.75 0 0 1 13.5 22.5h-3a3.75 3.75 0 0 1-3.737-3.46L5.76 6H5.25a.75.75 0 0 1 0-1.5H9V3.75Zm1.5.75h3V3.75a.75.75 0 0 0-.75-.75h-1.5a.75.75 0 0 0-.75.75V4.5Zm-2.992 1.5 1 13.03a2.25 2.25 0 0 0 2.242 2.12h3a2.25 2.25 0 0 0 2.242-2.12l1-13.03H7.508ZM9.75 9a.75.75 0 0 1 .75.75v8.25a.75.75 0 0 1-1.5 0V9.75A.75.75 0 0 1 9.75 9Zm4.5 0a.75.75 0 0 1 .75.75v8.25a.75.75 0 0 1-1.5 0V9.75a.75.75 0 0 1 .75-.75Z" clip-rule="evenodd" />
+                    </svg>
+                  </button>
+                </form>
+              </td>
             </tr>
             {% endfor %}
           </tbody>
@@ -59,6 +70,19 @@
     const results = document.getElementById('history-results');
     if (!input || !results) return;
     let t;
+    function bindConfirms(scope){
+      (scope || document).querySelectorAll('form[data-confirm]').forEach(form => {
+        form.addEventListener('submit', function(e){
+          e.preventDefault();
+          const msg = this.getAttribute('data-confirm') || '¿Seguro?';
+          if (window.confirmAction) {
+            window.confirmAction({ title: 'Confirmar', message: msg, okText: 'Sí, eliminar', okColor: 'red' }, ()=> this.submit());
+          } else {
+            if (confirm(msg)) this.submit();
+          }
+        });
+      });
+    }
     function debounceFetch(){
       clearTimeout(t);
       t = setTimeout(async () => {
@@ -73,11 +97,14 @@
           const newResults = doc.getElementById('history-results');
           if (newResults) {
             results.innerHTML = newResults.innerHTML;
+            bindConfirms(results);
           }
         } catch(_) {}
       }, 200);
     }
     input.addEventListener('input', debounceFetch);
+    // initial bind
+    bindConfirms(results);
   })();
 </script>
 {% endblock %}

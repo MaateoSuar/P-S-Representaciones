@@ -245,6 +245,30 @@ def dashboard():
 def api_products():
     df = load_products()
     q = request.args.get("q", "").strip().lower()
+    # If a client name is provided, set it as active in session (name/email/margin)
+    client_name_param = request.args.get("client", "").strip()
+    if client_name_param:
+        try:
+            clients = load_clients()
+            # case-insensitive match by name
+            target = next((c for c in clients if c.get("name", "").strip().lower() == client_name_param.lower()), None)
+            if target:
+                # If client changed, clear cart
+                prev_id = session.get("current_client_id")
+                prev_name = session.get("current_client_name")
+                new_id = target.get("id")
+                new_name = target.get("name")
+                if prev_id != new_id or (prev_id is None and prev_name and prev_name != new_name):
+                    session["cart"] = []
+                session["current_client_id"] = new_id
+                session["current_client_name"] = new_name
+                session["current_client_email"] = target.get("email", "")
+                # update default margin from client if present
+                if target.get("default_margin") is not None:
+                    session["current_client_margin"] = float(target.get("default_margin", 20.0))
+                session.modified = True
+        except Exception:
+            pass
     margin = request.args.get("margin")
     if margin is None:
         margin = session.get("current_client_margin", 20.0)
@@ -257,6 +281,8 @@ def api_products():
         "products": df.to_dict(orient="records"),
         "margin": margin,
         "current_client_name": session.get("current_client_name"),
+        "current_client_email": session.get("current_client_email"),
+        "cart_count": sum(int(i.get("qty", 0)) for i in session.get("cart", [])),
     })
 
 
@@ -277,6 +303,25 @@ def cart_add():
     if row.empty:
         flash("Producto no encontrado", "error")
         return redirect(url_for("products"))
+
+
+@app.route("/clients/<int:cid>/delete", methods=["POST"])
+def clients_delete(cid: int):
+    clients = load_clients()
+    before = len(clients)
+    clients = [c for c in clients if c.get("id") != cid]
+    if len(clients) == before:
+        flash("Cliente no encontrado", "error")
+        return redirect(url_for("clients_list"))
+    save_clients(clients)
+    # If deleted client was active, clear selection and cart
+    if session.get("current_client_id") == cid:
+        for key in ("current_client_id", "current_client_name", "current_client_margin", "current_client_email"):
+            session.pop(key, None)
+        session["cart"] = []
+        session.modified = True
+    flash("Cliente eliminado", "success")
+    return redirect(url_for("clients_list"))
     r = row.iloc[0]
     final_price = round(float(r["cost"]) * (1 + margin / 100), 2)
     item = {
@@ -538,6 +583,7 @@ def history():
                     "client_name": client_name,
                     "total": total,
                     "pdf_name": pdf_name if pdf_exists else None,
+                    "filename": fname,
                 })
             except Exception:
                 continue
@@ -548,6 +594,46 @@ def history():
     # Sort by created_at/order_id desc
     orders.sort(key=lambda x: (x.get("created_at", ""), x.get("order_id", "")), reverse=True)
     return render_template("history.html", orders=orders, q=q)
+
+
+@app.route("/history/delete", methods=["POST"])
+def history_delete():
+    filename = request.form.get("filename", "").strip()
+    if not filename or not filename.endswith(".json"):
+        flash("Archivo inválido", "error")
+        return redirect(url_for("history"))
+    import json as _json
+    fpath = os.path.join(ORDERS_DIR, filename)
+    try:
+        pdf_to_remove = None
+        if os.path.isfile(fpath):
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    data = _json.load(f)
+                pdf_name = data.get("pdf_filename")
+                if not pdf_name:
+                    # legacy fallback
+                    order_id = data.get("order_id", os.path.splitext(filename)[0])
+                    legacy = f"remito-{order_id}.pdf"
+                    legacy_path = os.path.join(PDF_DIR, legacy)
+                    if os.path.isfile(legacy_path):
+                        pdf_to_remove = legacy
+                else:
+                    pdf_to_remove = pdf_name
+            except Exception:
+                pass
+            os.remove(fpath)
+        if pdf_to_remove:
+            pdf_path = os.path.join(PDF_DIR, pdf_to_remove)
+            if os.path.isfile(pdf_path):
+                try:
+                    os.remove(pdf_path)
+                except Exception:
+                    pass
+        flash("Remito eliminado", "success")
+    except Exception:
+        flash("No se pudo eliminar el remito", "error")
+    return redirect(url_for("history"))
 
 
 
@@ -611,6 +697,10 @@ def clients_use(cid: int):
     if not client:
         flash("Cliente no encontrado", "error")
         return redirect(url_for("clients_list"))
+    # If client changed, clear cart
+    prev_id = session.get("current_client_id")
+    if prev_id != cid:
+        session["cart"] = []
     session["current_client_id"] = cid
     session["current_client_name"] = client.get("name")
     session["current_client_margin"] = client.get("default_margin", 20.0)
