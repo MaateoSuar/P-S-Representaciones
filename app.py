@@ -48,8 +48,8 @@ def _safe_filename(text: str) -> str:
     return "".join(ch if ch in allowed else "_" for ch in text).strip()
 
 # Single-user login credentials (can be overridden via environment variables)
-LOGIN_USER = os.environ.get("APP_LOGIN_USER", "asd")
-LOGIN_PASS = os.environ.get("APP_LOGIN_PASS", "asd")
+LOGIN_USER = os.environ.get("APP_LOGIN_USER", "representaciones@gmail.com")
+LOGIN_PASS = os.environ.get("APP_LOGIN_PASS", "representaciones")
 
 
 @app.before_request
