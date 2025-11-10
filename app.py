@@ -783,8 +783,10 @@ def pipeline_view():
                 # Map legacy states to current pipeline
                 if state in ("Oportunidad", "Remito"):
                     state = "Pedido"
-                # Date filters
-                if month_sel or day_sel:
+                if state not in columns:
+                    state = "Pedido"
+                # Apply date filters ONLY to 'Cobrado'
+                if state == "Cobrado" and (month_sel or day_sel):
                     created_at = order.get("created_at", "")
                     try:
                         dt = datetime.fromisoformat(created_at)
@@ -793,10 +795,8 @@ def pipeline_view():
                         if day_sel and dt.day != day_sel:
                             continue
                     except Exception:
-                        # If cannot parse date, skip when filtering
+                        # If cannot parse date and filtering requested, skip only for Cobrado
                         continue
-                if state not in columns:
-                    state = "Pedido"
                 columns[state].append(order)
             except Exception:
                 continue

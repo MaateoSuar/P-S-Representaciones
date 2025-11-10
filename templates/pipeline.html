@@ -1,27 +1,6 @@
 {% extends 'layout.html' %}
 {% block content %}
 <h1 class="text-2xl font-semibold text-gray-800 mb-4">Pipeline de Ventas</h1>
-<form method="get" action="{{ url_for('pipeline_view') }}" class="flex items-center gap-3 mb-6">
-  <div>
-    <label class="block text-xs text-gray-500 mb-1">Mes</label>
-    <select name="month" class="rounded border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-      <option value="">Todos</option>
-      {% for m,name in [(1,'Enero'),(2,'Febrero'),(3,'Marzo'),(4,'Abril'),(5,'Mayo'),(6,'Junio'),(7,'Julio'),(8,'Agosto'),(9,'Septiembre'),(10,'Octubre'),(11,'Noviembre'),(12,'Diciembre')] %}
-        <option value="{{ m }}" {% if month_sel==m %}selected{% endif %}>{{ name }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div>
-    <label class="block text-xs text-gray-500 mb-1">Día</label>
-    <select name="day" class="rounded border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-      <option value="">Todos</option>
-      {% for d in range(1,32) %}
-        <option value="{{ d }}" {% if day_sel==d %}selected{% endif %}>{{ d }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <button type="submit" class="px-3 py-2 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm">Aplicar</button>
-</form>
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
   {% for col in ['Pedido','Enviado','Entregado (A cobrar)','Cobrado'] %}
   <div class="bg-white rounded-lg shadow p-4">
@@ -29,6 +8,29 @@
       <h2 class="text-sm font-semibold text-emerald-800">{{ col }}</h2>
       <span class="text-xs text-gray-500">{{ (columns[col]|length) if columns[col] else 0 }}</span>
     </div>
+    {% if col == 'Cobrado' %}
+    <form method="get" action="{{ url_for('pipeline_view') }}" class="flex items-center gap-3 mb-4">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Mes</label>
+        <select name="month" class="rounded border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+          <option value="">Todos</option>
+          {% for m,name in [(1,'Enero'),(2,'Febrero'),(3,'Marzo'),(4,'Abril'),(5,'Mayo'),(6,'Junio'),(7,'Julio'),(8,'Agosto'),(9,'Septiembre'),(10,'Octubre'),(11,'Noviembre'),(12,'Diciembre')] %}
+            <option value="{{ m }}" {% if month_sel==m %}selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Día</label>
+        <select name="day" class="rounded border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+          <option value="">Todos</option>
+          {% for d in range(1,32) %}
+            <option value="{{ d }}" {% if day_sel==d %}selected{% endif %}>{{ d }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="px-3 py-2 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm">Aplicar</button>
+    </form>
+    {% endif %}
     <div class="space-y-3">
       {% for o in columns[col] %}
       <div class="border border-gray-200 rounded-lg p-3">
