@@ -19,7 +19,7 @@
       </div>
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">Teléfono</label>
-        <input name="phone" value="{{ client.phone if client }}" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500" />
+        <input name="phone" value="{{ client.phone if client }}" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="20" oninput="this.value=this.value.replace(/[^0-9]/g,'')" class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500" />
       </div>
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">Margen por defecto (%)</label>

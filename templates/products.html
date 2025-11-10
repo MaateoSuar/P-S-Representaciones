@@ -1,6 +1,9 @@
 {% extends 'layout.html' %}
 {% block content %}
 <div class="bg-white rounded-lg shadow p-6">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-lg font-semibold text-gray-800">Productos</h2>
+  </div>
   <form method="get" class="grid grid-cols-1 gap-3 mb-2" id="products-filter-form" onsubmit="return false;">
     <!-- Row 1: Client full width -->
     <div class="relative">
@@ -34,7 +37,6 @@
       </div>
     </div>
   </form>
-
   
 
   <script id="clients-data" type="application/json">{{ (clients or [])|tojson }}</script>
@@ -49,7 +51,9 @@
           <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">P. Final</th>
           <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">SubTotal</th>
           <th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Cant</th>
-          <th class="px-4 py-2"></th>
+          <th class="px-4 py-2 text-right">
+            <a href="{{ url_for('cart_view') }}" class="inline-flex items-center px-3 py-2 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50">Ir al carrito</a>
+          </th>
         </tr>
       </thead>
       <tbody class="bg-white divide-y divide-gray-200" id="products-body">

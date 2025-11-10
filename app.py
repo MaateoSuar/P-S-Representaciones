@@ -176,6 +176,7 @@ def inject_globals():
         "cart_count": sum(int(i.get("qty", 0)) for i in cart),
         "current_client_name": session.get("current_client_name"),
         "current_client_email": session.get("current_client_email"),
+        "sales_responsible": session.get("sales_responsible"),
     }
 
 
@@ -379,6 +380,7 @@ def checkout():
         return redirect(url_for("products"))
     client_name = request.form.get("client_name", "Cliente")
     client_email = request.form.get("client_email", "")
+    responsible = request.form.get("responsible", "").strip()
     now = datetime.now()
     order_id = now.strftime("%Y%m%d-%H%M%S")
     total = sum(item["final_price"] * item["qty"] for item in cart)
@@ -390,6 +392,7 @@ def checkout():
         "order_id": order_id,
         "client_name": client_name,
         "client_email": client_email,
+        "responsible": responsible,
         "created_at": now.isoformat(),
         "items": cart,
         "total": round(total, 2),
@@ -424,6 +427,10 @@ def checkout():
 
     # Clear cart
     save_cart([])
+    # Remember last chosen responsible for convenience
+    if responsible:
+        session["sales_responsible"] = responsible
+        session.modified = True
 
     return redirect(url_for("history"))
 
@@ -561,6 +568,7 @@ def history():
                     created_display = created_at[:10]
                 client_name = data.get("client_name", "")
                 total = data.get("total", 0)
+                responsible = data.get("responsible", "")
                 # Prefer stored filename, else fallback to old naming
                 pdf_name = data.get("pdf_filename")
                 if pdf_name:
@@ -574,6 +582,7 @@ def history():
                     "created_at": created_at,
                     "created_display": created_display,
                     "client_name": client_name,
+                    "responsible": responsible,
                     "total": total,
                     "pdf_name": pdf_name if pdf_exists else None,
                     "filename": fname,
