@@ -703,6 +703,24 @@ def clients_use(cid: int):
     return redirect(url_for("products"))
 
 
+@app.route("/clients/<int:cid>/delete", methods=["POST"])
+def clients_delete(cid: int):
+    clients = load_clients()
+    before = len(clients)
+    clients = [c for c in clients if c.get("id") != cid]
+    if len(clients) == before:
+        flash("Cliente no encontrado", "error")
+        return redirect(url_for("clients_list"))
+    save_clients(clients)
+    # If deleted client was active, clear selection and cart
+    if session.get("current_client_id") == cid:
+        for key in ("current_client_id", "current_client_name", "current_client_margin", "current_client_email"):
+            session.pop(key, None)
+        session["cart"] = []
+        session.modified = True
+    flash("Cliente eliminado", "success")
+    return redirect(url_for("clients_list"))
+
 # Apply client default margin on products list if available
 @app.route("/products")
 def products():
