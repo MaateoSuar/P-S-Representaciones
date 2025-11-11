@@ -464,6 +464,19 @@ def cart_view():
 
 @app.route("/cart/add", methods=["POST"])
 def cart_add():
+    # Require a selected/active client before adding to cart
+    wants_json = (
+        "application/json" in (request.headers.get("Accept", ""))
+        or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        or request.form.get("ajax") == "1"
+        or (request.headers.get("Referer") and "/products" in request.headers.get("Referer"))
+    )
+    if not session.get("current_client_name"):
+        if wants_json:
+            return jsonify({"ok": False, "error": "Debe seleccionar un cliente registrado antes de agregar al carrito"}), 400
+        flash("Debe seleccionar un cliente registrado antes de agregar al carrito", "error")
+        return redirect(url_for("products"))
+
     df = load_products()
     pid = int(request.form.get("id"))
     qty = max(1, int(request.form.get("qty", 1)))

@@ -109,7 +109,7 @@
 
     function isValidClientName(raw){
       const name = (raw||'').trim().toLowerCase();
-      if (!name) return true; // allow empty (no client selected)
+      if (!name) return false; // require selecting a client
       return (allClients||[]).some(c => (c&&c.name?c.name:'').trim().toLowerCase() === name);
     }
     function bumpClientInput(){
@@ -413,11 +413,9 @@
           // Ensure client typed manually is set active before adding
           try {
             const typed = (clientInput && clientInput.value ? clientInput.value.trim() : '');
-            if (typed) {
-              // Block add if client does not exist
-              if (!isValidClientName(typed)) { bumpClientInput(); showTempAlert('Agregue un Cliente registrado'); return; }
-              await setActiveClient(typed);
-            }
+            // Block add if no client or client does not exist
+            if (!typed || !isValidClientName(typed)) { bumpClientInput(); showTempAlert('Agregue un Cliente registrado'); return; }
+            await setActiveClient(typed);
           } catch(_) {}
           const formData = new FormData(formEl);
           formData.set('qty', String(qty));
