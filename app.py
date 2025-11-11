@@ -10,8 +10,12 @@ from io import BytesIO
 import json
 import smtplib
 from email.message import EmailMessage
-import sqlalchemy as sa
-from sqlalchemy import text as _sql_text
+try:
+    import sqlalchemy as sa
+    from sqlalchemy import text as _sql_text
+except ImportError:  # allow running locally without DB deps
+    sa = None
+    _sql_text = None
 import urllib.parse as _up
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret-change-me")
@@ -39,6 +43,8 @@ def _get_engine():
     global _ENGINE
     if _ENGINE is not None:
         return _ENGINE
+    if sa is None:
+        return None
     url = DATABASE_URL
     if not url:
         return None
@@ -1003,13 +1009,15 @@ def products():
     df = df.copy()
     df["final_price"] = (df["cost"] * (1 + margin / 100)).round(2)
     current_client_name = session.get("current_client_name")
+    # Provide clients list for suggestions/validation from DB when available
+    clients_src = db_list_clients("") if db_enabled() else load_clients()
     return render_template(
         "products.html",
         products=df.to_dict(orient="records"),
         margin=margin,
         q=q,
         current_client_name=current_client_name,
-        clients=load_clients(),
+        clients=clients_src,
         client=client_query,
     )
 
