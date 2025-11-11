@@ -4,6 +4,7 @@
   <div class="flex items-center justify-between mb-3">
     <h2 class="text-lg font-semibold text-gray-800">Productos</h2>
   </div>
+  <div id="temp-alert" class="hidden fixed top-4 right-4 z-50 px-4 py-2 rounded bg-red-600 text-white shadow"></div>
   <form method="get" class="grid grid-cols-1 gap-3 mb-2" id="products-filter-form" onsubmit="return false;">
     <!-- Row 1: Client full width -->
     <div class="relative">
@@ -105,6 +106,25 @@
     const suggBox = document.getElementById('client-suggestions');
     let suggMatches = [];
     let suggIndex = -1;
+
+    function isValidClientName(raw){
+      const name = (raw||'').trim().toLowerCase();
+      if (!name) return true; // allow empty (no client selected)
+      return (allClients||[]).some(c => (c&&c.name?c.name:'').trim().toLowerCase() === name);
+    }
+    function bumpClientInput(){
+      if (!clientInput) return;
+      clientInput.classList.add('ring-2','ring-red-400');
+      setTimeout(()=> clientInput.classList.remove('ring-2','ring-red-400'), 600);
+    }
+    function showTempAlert(msg){
+      const box = document.getElementById('temp-alert');
+      if (!box) return;
+      box.textContent = msg || '';
+      box.classList.remove('hidden');
+      clearTimeout(box._t);
+      box._t = setTimeout(()=> box.classList.add('hidden'), 3000);
+    }
 
     let fetchReason = 'search'; // 'search' | 'apply'
     async function fetchAndRender(){
@@ -252,9 +272,20 @@
     });
     // Do not auto-apply on blur to avoid reverting to previous client
     // Apply button (form submit)
-    form.addEventListener('submit', (e)=>{ e.preventDefault(); fetchReason='apply'; fetchAndRender(); });
+    form.addEventListener('submit', (e)=>{
+      e.preventDefault();
+      // Block if client typed does not exist
+      const typed = clientInput ? (clientInput.value||'') : '';
+      if (typed && !isValidClientName(typed)) { bumpClientInput(); showTempAlert('Agregue un Cliente registrado'); return; }
+      fetchReason='apply'; fetchAndRender();
+    });
     const applyBtn = document.getElementById('apply-btn');
-    if (applyBtn) applyBtn.addEventListener('click', (e)=>{ e.preventDefault(); fetchReason='apply'; fetchAndRender(); });
+    if (applyBtn) applyBtn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      const typed = clientInput ? (clientInput.value||'') : '';
+      if (typed && !isValidClientName(typed)) { bumpClientInput(); showTempAlert('Agregue un Cliente registrado'); return; }
+      fetchReason='apply'; fetchAndRender();
+    });
     const exportBtn = document.getElementById('export-pdf-btn');
     if (exportBtn) exportBtn.addEventListener('click', (e)=>{
       e.preventDefault();
@@ -383,6 +414,8 @@
           try {
             const typed = (clientInput && clientInput.value ? clientInput.value.trim() : '');
             if (typed) {
+              // Block add if client does not exist
+              if (!isValidClientName(typed)) { bumpClientInput(); showTempAlert('Agregue un Cliente registrado'); return; }
               await setActiveClient(typed);
             }
           } catch(_) {}
