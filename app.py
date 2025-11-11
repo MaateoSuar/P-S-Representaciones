@@ -344,7 +344,8 @@ def db_list_history(q: str = ""):
         return None
     params = {}
     sql = """
-        SELECT order_id, client_name, client_email, responsible, created_at, total, state, pdf_filename, data
+        SELECT order_id, client_name, client_email, responsible, created_at, total, state, pdf_filename, data,
+               (pdf_data IS NOT NULL) AS has_pdf
         FROM historial
     """
     q = (q or "").strip()
@@ -378,7 +379,10 @@ def db_list_history(q: str = ""):
         if pdf_name:
             pdf_path = os.path.join(PDF_DIR, pdf_name)
             if not os.path.exists(pdf_path):
-                pdf_name = None
+                # keep link if DB has the PDF content
+                has_pdf = bool(r.get("has_pdf"))
+                if not has_pdf:
+                    pdf_name = None
         filename = data_obj.get("filename") or f"{r.get('order_id')}.json"
         if filename:
             file_path = os.path.join(ORDERS_DIR, filename)
