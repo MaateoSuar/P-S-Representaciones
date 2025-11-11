@@ -1,0 +1,169 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="bg-white rounded-lg shadow p-6">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-xl font-semibold text-gray-800">Editar pedido {{ order.order_id }}</h2>
+    <a class="text-emerald-700" href="{{ url_for('history') }}">Volver al historial</a>
+  </div>
+
+  <form method="post" action="{{ url_for('history_edit', order_id=order.order_id) }}" id="order-edit-form" class="space-y-4">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div>
+        <label class="block text-sm text-gray-600">Cliente</label>
+        <input class="input-field w-full rounded px-3 py-2" type="text" name="client_name" value="{{ order.client_name or '' }}" />
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600">Email</label>
+        <input class="input-field w-full rounded px-3 py-2" type="email" name="client_email" value="{{ order.client_email or '' }}" />
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600">Responsable de la venta</label>
+        <select name="responsible" class="input-field w-full rounded px-3 py-2" required>
+          <option value="">-- Seleccionar --</option>
+          <option value="Pablo" {% if order.responsible=='Pablo' or (not order.responsible and sales_responsible=='Pablo') %}selected{% endif %}>Pablo</option>
+          <option value="Sergio" {% if order.responsible=='Sergio' or (not order.responsible and sales_responsible=='Sergio') %}selected{% endif %}>Sergio</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-gray-200 table-striped" id="items-table">
+        <thead class="bg-gray-50">
+          <tr>
+            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
+            <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Venc.</th>
+            <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Costo</th>
+            <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Margen %</th>
+            <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">P.Final</th>
+            <th class="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Cant</th>
+            <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Acciones</th>
+          </tr>
+        </thead>
+        <tbody class="bg-white divide-y divide-gray-200" id="items-body">
+          {% for it in (items or []) %}
+          <tr>
+            <td class="px-3 py-2">
+              <div class="relative">
+                <input name="name[]" class="input-field w-full rounded px-2 py-1 product-name" autocomplete="off" value="{{ it.name }}" />
+                <div class="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded shadow hidden sugg-box max-h-56 overflow-auto"></div>
+              </div>
+            </td>
+            <td class="px-3 py-2 text-right"><input name="vencimiento[]" class="input-field w-28 rounded px-2 py-1 text-right" value="{{ it.vencimiento or '' }}" /></td>
+            <td class="px-3 py-2 text-right"><input name="cost[]" type="number" step="0.01" class="input-field w-28 rounded px-2 py-1 text-right" value="{{ '%.2f'|format(it.cost) }}" /></td>
+            <td class="px-3 py-2 text-right"><input name="margin[]" type="number" step="0.1" class="input-field w-24 rounded px-2 py-1 text-right" value="{{ '%.1f'|format(it.margin) }}" /></td>
+            <td class="px-3 py-2 text-right"><input name="final_price[]" type="number" step="0.01" class="input-field w-28 rounded px-2 py-1 text-right" value="{{ '%.2f'|format(it.final_price) }}" /></td>
+            <td class="px-3 py-2 text-center"><input name="qty[]" type="number" min="0" class="input-field w-20 rounded px-2 py-1 text-center" value="{{ it.qty }}" /></td>
+            <td class="px-3 py-2 text-right">
+              <button type="button" class="text-red-600 hover:text-red-700 btn-remove">Eliminar</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="flex items-center justify-between">
+      <button type="button" id="btn-add-row" class="px-3 py-2 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50">Agregar ítem</button>
+      <button type="submit" class="btn-primary px-4 py-2 rounded">Guardar cambios</button>
+    </div>
+  </form>
+</div>
+<script>
+  (function(){
+    const body = document.getElementById('items-body');
+    const addBtn = document.getElementById('btn-add-row');
+    if (addBtn) addBtn.addEventListener('click', () => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="px-3 py-2"><div class="relative"><input name="name[]" class="input-field w-full rounded px-2 py-1 product-name" autocomplete="off" value="" /><div class="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded shadow hidden sugg-box max-h-56 overflow-auto"></div></div></td>
+        <td class="px-3 py-2 text-right"><input name="vencimiento[]" class="input-field w-28 rounded px-2 py-1 text-right" value="" /></td>
+        <td class="px-3 py-2 text-right"><input name="cost[]" type="number" step="0.01" class="input-field w-28 rounded px-2 py-1 text-right" value="0.00" /></td>
+        <td class="px-3 py-2 text-right"><input name="margin[]" type="number" step="0.1" class="input-field w-24 rounded px-2 py-1 text-right" value="0.0" /></td>
+        <td class="px-3 py-2 text-right"><input name="final_price[]" type="number" step="0.01" class="input-field w-28 rounded px-2 py-1 text-right" value="0.00" /></td>
+        <td class="px-3 py-2 text-center"><input name="qty[]" type="number" min="0" class="input-field w-20 rounded px-2 py-1 text-center" value="0" /></td>
+        <td class="px-3 py-2 text-right">
+          <button type="button" class="text-red-600 hover:text-red-700 btn-remove">Eliminar</button>
+        </td>`;
+      body.appendChild(tr);
+      bindRemovers(tr);
+      bindAutocomplete(tr);
+    });
+    function bindRemovers(scope){
+      (scope || document).querySelectorAll('.btn-remove').forEach(btn => {
+        btn.addEventListener('click', ()=>{
+          const tr = btn.closest('tr');
+          if (tr) tr.remove();
+        })
+      });
+    }
+    bindRemovers(document);
+
+    // Autocomplete de productos por fila
+    function bindAutocomplete(scope){
+      const rows = (scope || document).querySelectorAll('tr');
+      rows.forEach(row => {
+        const nameInput = row.querySelector('input.product-name');
+        const sugg = row.querySelector('.sugg-box');
+        const costInput = row.querySelector('input[name="cost[]"]');
+        const vencInput = row.querySelector('input[name="vencimiento[]"]');
+        const marginInput = row.querySelector('input[name="margin[]"]');
+        const finalInput = row.querySelector('input[name="final_price[]"]');
+        if (!nameInput || !sugg) return;
+        let t;
+        function render(items){
+          if (!items || !items.length) { sugg.classList.add('hidden'); sugg.innerHTML=''; return; }
+          sugg.innerHTML = items.map((p,i)=>`
+            <button type="button" data-index="${i}" class="w-full text-left px-3 py-2 hover:bg-emerald-50">
+              <div class="text-sm text-gray-800">${escapeHtml(p.name||'')}</div>
+              <div class="text-xs text-gray-500 flex justify-between"><span>Venc: ${escapeHtml((p.vencimiento||'').trim()||'-')}</span><span>Cost: $${Number(p.cost||0).toFixed(2)}</span></div>
+            </button>
+          `).join('');
+          Array.from(sugg.querySelectorAll('button')).forEach((btn)=>{
+            btn.addEventListener('click',()=>{
+              const idx = parseInt(btn.getAttribute('data-index'));
+              if (isNaN(idx)) return;
+              const p = (items||[])[idx];
+              if (!p) return;
+              nameInput.value = p.name||'';
+              // Set only final price, do not overwrite cost or vencimiento
+              if (marginInput && finalInput){
+                const m = parseFloat(marginInput.value||'0')||0;
+                const f = (parseFloat(p.cost||0)||0) * (1+m/100);
+                finalInput.value = f.toFixed(2);
+              }
+              sugg.classList.add('hidden');
+            });
+          });
+          sugg.classList.remove('hidden');
+        }
+        function escapeHtml(str){
+          return String(str)
+            .replace(/&/g,'&amp;')
+            .replace(/</g,'&lt;')
+            .replace(/>/g,'&gt;')
+            .replace(/"/g,'&quot;')
+            .replace(/'/g,'&#039;');
+        }
+        function fetchSugg(){
+          clearTimeout(t);
+          t = setTimeout(async ()=>{
+            const q = (nameInput.value||'').trim();
+            if (!q){ sugg.classList.add('hidden'); sugg.innerHTML=''; return; }
+            try{
+              const params = new URLSearchParams({ q });
+              const res = await fetch(`/api/products?${params.toString()}`, { headers: { 'Accept':'application/json', 'X-Requested-With':'XMLHttpRequest' } });
+              if (!res.ok) return;
+              const data = await res.json();
+              render((data.products||[]).slice(0,12));
+            }catch(_){}
+          }, 200);
+        }
+        nameInput.addEventListener('input', fetchSugg);
+        nameInput.addEventListener('focus', fetchSugg);
+        document.addEventListener('click', (e)=>{ if (!sugg.contains(e.target) && e.target!==nameInput) sugg.classList.add('hidden'); });
+      });
+    }
+    bindAutocomplete(document);
+  })();
+</script>
+{% endblock %}

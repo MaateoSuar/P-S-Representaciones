@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, date
-from flask import Flask, render_template, request, redirect, url_for, session, send_from_directory, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, send_from_directory, flash, jsonify, send_file
 import pandas as pd
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -120,7 +120,7 @@ def load_products() -> pd.DataFrame:
     name_col = cols.get("name") or cols.get("producto")
     # Accept custom cost header '-3%'
     cost_col = cols.get("cost") or cols.get("precio") or cols.get("costo") or cols.get("-3%") or cols.get("- 3%")
-    # Accept typo 'fecha vencimeinto' and other variants
+    # Accept typo 'fecha vencimeinto' and broader variants
     venc_col = (
         cols.get("vencimiento")
         or cols.get("fecha vencimiento")
@@ -129,6 +129,13 @@ def load_products() -> pd.DataFrame:
         or cols.get("vto")
         or cols.get("fecha vto")
     )
+    if not venc_col:
+        # Fallback: pick first column whose lowercase contains 'venc' or 'vto'
+        for c in df.columns:
+            lc = str(c).strip().lower()
+            if ("venc" in lc) or ("vto" in lc) or ("venci" in lc):
+                venc_col = c
+                break
     rename_map = {}
     if name_col and name_col != "name":
         rename_map[name_col] = "name"
@@ -153,7 +160,11 @@ def load_products() -> pd.DataFrame:
         cost_s = cost_s.str.replace(",", ".", regex=False)
         df["cost"] = pd.to_numeric(cost_s, errors="coerce")
     if "vencimiento" in df:
-        df["vencimiento"] = df["vencimiento"].astype(str)
+        # Normalize NaN to empty and keep as string
+        df["vencimiento"] = df["vencimiento"].fillna("").astype(str)
+    else:
+        # Ensure column exists for downstream consumers
+        df["vencimiento"] = ""
     # Drop rows without name or cost not parsed
     df = df.dropna(subset=["name", "cost"]).reset_index(drop=True)
     df["id"] = df.index.astype(int)
@@ -177,6 +188,7 @@ def inject_globals():
         "current_client_name": session.get("current_client_name"),
         "current_client_email": session.get("current_client_email"),
         "sales_responsible": session.get("sales_responsible"),
+        "editing_order_id": session.get("edit_order_id"),
     }
 
 
@@ -351,6 +363,27 @@ def cart_add():
     return redirect(url_for("cart_view"))
 
 
+@app.route("/cart/update", methods=["POST"])
+def cart_update():
+    try:
+        idx = int(request.form.get("index", "-1"))
+        qty = int(request.form.get("qty", "0"))
+    except ValueError:
+        flash("Datos inválidos", "error")
+        return redirect(url_for("cart_view"))
+    cart = get_cart()
+    if 0 <= idx < len(cart):
+        if qty <= 0:
+            cart.pop(idx)
+            flash("Item eliminado", "success")
+        else:
+            cart[idx]["qty"] = qty
+            flash("Cantidad actualizada", "success")
+        save_cart(cart)
+    else:
+        flash("No se pudo actualizar el item", "error")
+    return redirect(url_for("cart_view"))
+
 @app.route("/cart/clear", methods=["POST"])
 def cart_clear():
     save_cart([])
@@ -381,41 +414,76 @@ def checkout():
     client_name = request.form.get("client_name", "Cliente")
     client_email = request.form.get("client_email", "")
     responsible = request.form.get("responsible", "").strip()
+    if not responsible:
+        flash("Debe seleccionar el responsable de la venta", "error")
+        return redirect(url_for("cart_view"))
     now = datetime.now()
-    order_id = now.strftime("%Y%m%d-%H%M%S")
     total = sum(item["final_price"] * item["qty"] for item in cart)
 
-    # Save a simple order record
-    # Determine pipeline state (start at 'Pedido')
-    state = "Pedido"
-    order = {
-        "order_id": order_id,
-        "client_name": client_name,
-        "client_email": client_email,
-        "responsible": responsible,
-        "created_at": now.isoformat(),
-        "items": cart,
-        "total": round(total, 2),
-        "state": state,
-    }
-    with open(os.path.join(ORDERS_DIR, f"{order_id}.json"), "w", encoding="utf-8") as f:
-        json.dump(order, f, ensure_ascii=False, indent=2)
-
-    # Generate PDF remito
-    client_part = _safe_filename(client_name) or "Cliente"
-    pdf_filename = f"Remito - {client_part} - {order_id}.pdf"
-    pdf_path = os.path.join(PDF_DIR, pdf_filename)
-    generate_pdf_remito(pdf_path, order)
-    # update order with pdf filename for later use
-    try:
-        ofile = os.path.join(ORDERS_DIR, f"{order_id}.json")
-        with open(ofile, "r", encoding="utf-8") as f:
-            saved = json.load(f)
-        saved["pdf_filename"] = pdf_filename
-        with open(ofile, "w", encoding="utf-8") as f:
-            json.dump(saved, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    edit_id = session.get("edit_order_id")
+    if edit_id:
+        # Overwrite existing order
+        fpath = os.path.join(ORDERS_DIR, f"{edit_id}.json")
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = {"order_id": edit_id, "created_at": now.isoformat(), "state": "Pedido"}
+        # Preserve created_at and state and pdf filename if present
+        order = {
+            "order_id": existing.get("order_id", edit_id),
+            "client_name": client_name,
+            "client_email": client_email,
+            "responsible": responsible,
+            "created_at": existing.get("created_at", now.isoformat()),
+            "items": cart,
+            "total": round(total, 2),
+            "state": existing.get("state", "Pedido"),
+            "pdf_filename": existing.get("pdf_filename"),
+        }
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(order, f, ensure_ascii=False, indent=2)
+        # Regenerate PDF using stored or new filename
+        client_part = _safe_filename(client_name) or "Cliente"
+        pdf_filename = order.get("pdf_filename") or f"Remito - {client_part} - {order['order_id']}.pdf"
+        pdf_path = os.path.join(PDF_DIR, pdf_filename)
+        generate_pdf_remito(pdf_path, order)
+        # Save filename back
+        order["pdf_filename"] = pdf_filename
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(order, f, ensure_ascii=False, indent=2)
+        # Clear edit flag after saving
+        session.pop("edit_order_id", None)
+    else:
+        # Create new order
+        order_id = now.strftime("%Y%m%d-%H%M%S")
+        order = {
+            "order_id": order_id,
+            "client_name": client_name,
+            "client_email": client_email,
+            "responsible": responsible,
+            "created_at": now.isoformat(),
+            "items": cart,
+            "total": round(total, 2),
+            "state": "Pedido",
+        }
+        with open(os.path.join(ORDERS_DIR, f"{order_id}.json"), "w", encoding="utf-8") as f:
+            json.dump(order, f, ensure_ascii=False, indent=2)
+        # Generate PDF remito
+        client_part = _safe_filename(client_name) or "Cliente"
+        pdf_filename = f"Remito - {client_part} - {order_id}.pdf"
+        pdf_path = os.path.join(PDF_DIR, pdf_filename)
+        generate_pdf_remito(pdf_path, order)
+        # update order with pdf filename for later use
+        try:
+            ofile = os.path.join(ORDERS_DIR, f"{order_id}.json")
+            with open(ofile, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            saved["pdf_filename"] = pdf_filename
+            with open(ofile, "w", encoding="utf-8") as f:
+                json.dump(saved, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     # Optional email automation if SMTP configured and email provided
     if client_email and os.environ.get("SMTP_HOST"):
@@ -433,6 +501,34 @@ def checkout():
         session.modified = True
 
     return redirect(url_for("history"))
+
+
+@app.route("/history/<order_id>/to-cart")
+def history_to_cart(order_id: str):
+    fpath = os.path.join(ORDERS_DIR, f"{order_id}.json")
+    if not os.path.exists(fpath):
+        flash("Pedido no encontrado", "error")
+        return redirect(url_for("history"))
+    try:
+        with open(fpath, "r", encoding="utf-8") as f:
+            order = json.load(f)
+        # Load items into cart
+        items = order.get("items", [])
+        session["cart"] = items
+        # Set client context
+        session["current_client_name"] = order.get("client_name", "")
+        session["current_client_email"] = order.get("client_email", "")
+        # Set edit flag
+        session["edit_order_id"] = order.get("order_id", order_id)
+        # Preselect responsible
+        if order.get("responsible"):
+            session["sales_responsible"] = order.get("responsible")
+        session.modified = True
+        flash("Pedido cargado en el carrito para edición", "success")
+        return redirect(url_for("cart_view"))
+    except Exception:
+        flash("No se pudo cargar el pedido al carrito", "error")
+        return redirect(url_for("history"))
 
 
 def generate_pdf_remito(pdf_path: str, order: dict):
@@ -492,7 +588,10 @@ def generate_pdf_remito(pdf_path: str, order: dict):
             name = name + ell
 
         c.drawString(x_prod, y, name)
-        c.drawRightString(x_venc, y, str(item.get("vencimiento", "")))
+        venc = str(item.get("vencimiento", "")).strip()
+        if not venc:
+            venc = "-"
+        c.drawRightString(x_venc, y, venc)
         c.drawRightString(x_punit, y, f"{item['final_price']:.2f}")
         c.drawRightString(x_cant, y, str(item['qty']))
         y -= 7 * mm  # slightly taller rows to avoid visual overlap
@@ -832,6 +931,167 @@ def pipeline_set_state(order_id: str):
     except Exception:
         flash("No se pudo actualizar el estado", "error")
     return redirect(url_for("pipeline_view"))
+
+
+# Exportar listado de productos a PDF con margen elegido
+@app.route("/products/export-pdf")
+def products_export_pdf():
+    df = load_products()
+    q = request.args.get("q", "").strip().lower()
+    margin = request.args.get("margin")
+    if margin is None:
+        margin = session.get("current_client_margin", 20.0)
+    margin = float(margin or 0)
+    if q:
+        df = df[df["name"].str.lower().str.contains(q)]
+    df = df.copy()
+    df["final_price"] = (df["cost"] * (1 + margin / 100)).round(2)
+
+    buf = _generate_pdf_product_list(df.to_dict(orient="records"), margin)
+    filename = f"Catalogo - {datetime.now().strftime('%Y%m%d-%H%M')}.pdf"
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=filename)
+
+
+def _generate_pdf_product_list(products: list, margin: float) -> BytesIO:
+    cbuf = BytesIO()
+    c = canvas.Canvas(cbuf, pagesize=A4)
+    width, height = A4
+    margin_mm = 15 * mm
+
+    x_name = margin_mm
+    x_venc = width - margin_mm - 160
+    x_cost = width - margin_mm - 100
+    x_price = width - margin_mm - 40
+
+    y = height - margin_mm
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(margin_mm, y, f"Lista de productos (margen {margin:.1f}%)")
+    y -= 10 * mm
+    c.setFont("Helvetica", 10)
+    c.drawString(margin_mm, y, f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    y -= 8 * mm
+
+    def draw_header(cur_y):
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(x_name, cur_y, "Producto")
+        c.drawRightString(x_venc, cur_y, "Venc.")
+        c.drawRightString(x_cost, cur_y, "Costo")
+        c.drawRightString(x_price, cur_y, "P.Final")
+        cur_y -= 5 * mm
+        c.line(margin_mm, cur_y, width - margin_mm, cur_y)
+        return cur_y - 5 * mm
+
+    y = draw_header(y)
+    c.setFont("Helvetica", 9)
+    for p in products:
+        if y < 25 * mm:
+            c.showPage()
+            y = height - margin_mm
+            y = draw_header(y)
+            c.setFont("Helvetica", 9)
+        name = str(p.get("name", ""))
+        # truncate if needed
+        avail = x_venc - x_name - 6
+        if stringWidth(name, "Helvetica", 9) > avail:
+            ell = "…"
+            while name and stringWidth(name + ell, "Helvetica", 9) > avail:
+                name = name[:-1]
+            name += ell
+        c.drawString(x_name, y, name)
+        venc = str(p.get("vencimiento", "")).strip()
+        if not venc:
+            venc = "-"
+        c.drawRightString(x_venc, y, venc)
+        c.drawRightString(x_cost, y, f"{float(p.get('cost',0)):.2f}")
+        c.drawRightString(x_price, y, f"{float(p.get('final_price',0)):.2f}")
+        y -= 6 * mm
+
+    c.showPage()
+    c.save()
+    cbuf.seek(0)
+    return cbuf
+
+
+# Editar pedidos del historial
+@app.route("/history/<order_id>/edit", methods=["GET", "POST"])
+def history_edit(order_id: str):
+    fpath = os.path.join(ORDERS_DIR, f"{order_id}.json")
+    if not os.path.exists(fpath):
+        flash("Pedido no encontrado", "error")
+        return redirect(url_for("history"))
+    try:
+        with open(fpath, "r", encoding="utf-8") as f:
+            order = json.load(f)
+    except Exception:
+        flash("No se pudo cargar el pedido", "error")
+        return redirect(url_for("history"))
+
+    if request.method == "POST":
+        try:
+            # Require responsible selection similar to checkout
+            resp_in = (request.form.get("responsible") or "").strip()
+            if not resp_in:
+                flash("Debe seleccionar el responsable de la venta", "error")
+                return render_template("order_edit.html", order=order, items=order.get("items", []))
+            # collect items arrays
+            names = request.form.getlist("name[]")
+            costs = request.form.getlist("cost[]")
+            vtos = request.form.getlist("vencimiento[]")
+            margins = request.form.getlist("margin[]")
+            finals = request.form.getlist("final_price[]")
+            qtys = request.form.getlist("qty[]")
+            items = []
+            for i in range(len(names)):
+                try:
+                    qty = int(qtys[i])
+                except Exception:
+                    qty = 0
+                if qty <= 0:
+                    continue
+                try:
+                    cost = float(costs[i])
+                except Exception:
+                    cost = 0.0
+                try:
+                    margin_v = float(margins[i])
+                except Exception:
+                    margin_v = 0.0
+                # compute final price if not provided or invalid
+                try:
+                    fprice = float(finals[i]) if finals[i] else round(cost * (1 + margin_v/100), 2)
+                except Exception:
+                    fprice = round(cost * (1 + margin_v/100), 2)
+                items.append({
+                    "id": i,  # no reliable id; keep index
+                    "name": names[i],
+                    "cost": cost,
+                    "vencimiento": vtos[i] if i < len(vtos) else "",
+                    "margin": margin_v,
+                    "final_price": float(fprice),
+                    "qty": qty,
+                })
+            order["client_name"] = request.form.get("client_name", order.get("client_name", ""))
+            order["client_email"] = request.form.get("client_email", order.get("client_email", ""))
+            order["responsible"] = resp_in or order.get("responsible", "")
+            order["items"] = items
+            order["total"] = round(sum((it.get("final_price",0)*it.get("qty",0)) for it in items), 2)
+
+            # overwrite PDF
+            client_part = _safe_filename(order.get("client_name") or "Cliente")
+            pdf_filename = order.get("pdf_filename") or f"Remito - {client_part} - {order['order_id']}.pdf"
+            pdf_path = os.path.join(PDF_DIR, pdf_filename)
+            generate_pdf_remito(pdf_path, order)
+            order["pdf_filename"] = os.path.basename(pdf_filename)
+
+            with open(fpath, "w", encoding="utf-8") as f:
+                json.dump(order, f, ensure_ascii=False, indent=2)
+            flash("Pedido actualizado", "success")
+            return redirect(url_for("history"))
+        except Exception:
+            flash("No se pudo actualizar el pedido", "error")
+            return redirect(url_for("history"))
+
+    return render_template("order_edit.html", order=order, items=order.get("items", []))
 
 
 if __name__ == "__main__":

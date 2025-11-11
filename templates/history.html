@@ -49,6 +49,7 @@
                 {% endif %}
               </td>
               <td class="px-4 py-2 text-right">
+                <a href="{{ url_for('history_to_cart', order_id=o.order_id) }}" class="text-emerald-700 hover:text-emerald-800 mr-3" title="Editar">Editar</a>
                 <form method="post" action="{{ url_for('history_delete') }}" class="inline" data-confirm="¿Eliminar este remito? Esta acción no se puede deshacer.">
                   <input type="hidden" name="filename" value="{{ o.filename }}" />
                   <button type="submit" class="text-red-600 hover:text-red-700" title="Eliminar">

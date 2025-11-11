@@ -34,6 +34,7 @@
           <input class="input-field w-28 rounded px-3 py-2 h-[42px]" type="number" step="0.1" name="margin" value="{{ margin }}" />
         </div>
         <button id="apply-btn" class="btn-primary px-4 py-2 h-[42px] rounded" type="submit">Aplicar</button>
+        <button id="export-pdf-btn" class="inline-flex items-center justify-center px-4 py-2 h-[42px] rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50" type="button">Exportar Catalogo</button>
       </div>
     </div>
   </form>
@@ -52,7 +53,7 @@
           <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">SubTotal</th>
           <th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Cant</th>
           <th class="px-4 py-2 text-right">
-            <a href="{{ url_for('cart_view') }}" class="inline-flex items-center px-3 py-2 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50">Ir al carrito</a>
+            <a href="{{ url_for('cart_view') }}" class="inline-flex items-center justify-center px-4 py-2 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50">Ir al carrito</a>
           </th>
         </tr>
       </thead>
@@ -60,7 +61,7 @@
         {% for p in products %}
         <tr data-unit-price="{{ '%.2f'|format(p.final_price) }}">
           <td class="px-4 py-2">{{ p.name }}</td>
-          <td class="px-4 py-2 text-right">{{ p.vencimiento }}</td>
+          <td class="px-4 py-2 text-right">{{ p.vencimiento and p.vencimiento.strip() or '-' }}</td>
           <td class="px-4 py-2 text-right">${{ '%.2f'|format(p.cost) }}</td>
           <td class="px-4 py-2 text-right">${{ '%.2f'|format(p.final_price) }}</td>
           <td class="px-4 py-2 text-right subtotal-cell">$0.00</td>
@@ -71,12 +72,12 @@
               <button type="button" class="qty-plus px-2 h-[36px] text-gray-700 hover:bg-gray-100">+</button>
             </div>
           </td>
-          <td class="px-4 py-2 text-right">
+          <td class="px-4 py-2 text-center">
             <form method="post" action="{{ url_for('cart_add') }}" onsubmit="return false;" class="row-add-form inline-flex items-center gap-2">
               <input type="hidden" name="id" value="{{ p.id }}" />
               <input type="hidden" name="margin" value="{{ margin }}" />
               <input type="hidden" name="ajax" value="1" />
-              <button class="btn-primary px-3 py-1 h-[36px] rounded add-btn" type="button">Agregar</button>
+              <button class="btn-primary inline-flex items-center justify-center px-3 py-1 h-[36px] rounded add-btn" type="button">Agregar</button>
             </form>
           </td>
         </tr>
@@ -149,7 +150,7 @@
         const rows = (data.products || []).map(p => `
           <tr data-unit-price="${Number(p.final_price ?? 0).toFixed(2)}">
             <td class="px-4 py-2">${escapeHtml(p.name ?? '')}</td>
-            <td class="px-4 py-2 text-right">${escapeHtml(p.vencimiento ?? '')}</td>
+            <td class="px-4 py-2 text-right">${(() => { const v=(p.vencimiento ?? '').trim(); return v?escapeHtml(v):'-'; })()}</td>
             <td class="px-4 py-2 text-right">$${Number(p.cost ?? 0).toFixed(2)}</td>
             <td class="px-4 py-2 text-right">$${Number(p.final_price ?? 0).toFixed(2)}</td>
             <td class="px-4 py-2 text-right subtotal-cell">$0.00</td>
@@ -160,12 +161,12 @@
                 <button type="button" class="qty-plus px-2 h-[36px] text-gray-700 hover:bg-gray-100">+</button>
               </div>
             </td>
-            <td class="px-4 py-2 text-right">
+            <td class="px-4 py-2 text-center">
               <form method="post" action="${cartAddUrl}" class="row-add-form inline-flex items-center gap-2">
                 <input type="hidden" name="id" value="${p.id}" />
                 <input type="hidden" name="margin" value="${marginInput.value}" />
                 <input type="hidden" name="ajax" value="1" />
-                <button class="btn-primary px-3 py-1 h-[36px] rounded add-btn" type="button">Agregar</button>
+                <button class="btn-primary inline-flex items-center justify-center px-3 py-1 h-[36px] rounded add-btn" type="button">Agregar</button>
               </form>
             </td>
           </tr>`).join('');
@@ -254,6 +255,16 @@
     form.addEventListener('submit', (e)=>{ e.preventDefault(); fetchReason='apply'; fetchAndRender(); });
     const applyBtn = document.getElementById('apply-btn');
     if (applyBtn) applyBtn.addEventListener('click', (e)=>{ e.preventDefault(); fetchReason='apply'; fetchAndRender(); });
+    const exportBtn = document.getElementById('export-pdf-btn');
+    if (exportBtn) exportBtn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      const params = new URLSearchParams();
+      const qv = qInput && qInput.value ? qInput.value.trim() : '';
+      const mv = marginInput && marginInput.value ? marginInput.value : '';
+      if (qv) params.set('q', qv);
+      if (mv !== '') params.set('margin', mv);
+      window.location.href = `/products/export-pdf?${params.toString()}`;
+    });
     // Do not repaint table on client change automatically
     function renderSuggestions() {
       if (!suggMatches.length) { suggBox.classList.add('hidden'); suggBox.innerHTML=''; return; }

@@ -25,14 +25,20 @@
           {% for item in cart %}
           <tr>
             <td class="px-4 py-2">{{ item.name }}</td>
-            <td class="px-4 py-2 text-right">{{ item.vencimiento }}</td>
+            <td class="px-4 py-2 text-right">{{ (item.vencimiento or '')|trim or '-' }}</td>
             <td class="px-4 py-2 text-right">${{ '%.2f'|format(item.cost) }}</td>
             <td class="px-4 py-2 text-right">{{ '%.1f'|format(item.margin) }}%</td>
             <td class="px-4 py-2 text-right">${{ '%.2f'|format(item.final_price) }}</td>
-            <td class="px-4 py-2 text-right">{{ item.qty }}</td>
-            <td class="px-4 py-2 text-right">${{ '%.2f'|format(item.final_price * item.qty) }}</td>
             <td class="px-4 py-2 text-right">
-              <form method="post" action="{{ url_for('cart_remove') }}" data-confirm="Eliminar este item?">
+              <form method="post" action="{{ url_for('cart_update') }}" class="inline-flex items-center gap-2">
+                <input type="hidden" name="index" value="{{ loop.index0 }}" />
+                <input name="qty" type="number" min="0" class="input-field w-20 rounded px-2 py-1 text-right" value="{{ item.qty }}" />
+                <button class="px-3 py-1.5 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50" type="submit">Actualizar</button>
+              </form>
+            </td>
+            <td class="px-4 py-2 text-right">${{ '%.2f'|format(item.final_price * item.qty) }}</td>
+            <td class="px-4 py-2 text-center">
+              <form method="post" action="{{ url_for('cart_remove') }}" data-confirm="Eliminar este item?" class="inline-block">
                 <input type="hidden" name="index" value="{{ loop.index0 }}" />
                 <button class="px-3 py-1.5 rounded border border-red-300 text-red-700 hover:bg-red-50" type="submit">Eliminar</button>
               </form>
@@ -44,9 +50,12 @@
     </div>
 
     <div class="flex items-center justify-between mt-4">
-      <form method="post" action="{{ url_for('cart_clear') }}" data-confirm="¿Vaciar toda la venta?">
-        <button class="px-4 py-2 rounded border border-red-300 text-red-700 hover:bg-red-50" type="submit">Vaciar carrito</button>
-      </form>
+      <div class="flex items-center gap-3">
+        <a href="{{ url_for('products') }}" class="px-4 py-2 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50">Seguir agregando</a>
+        <form method="post" action="{{ url_for('cart_clear') }}" data-confirm="¿Vaciar toda la venta?">
+          <button class="px-4 py-2 rounded border border-red-300 text-red-700 hover:bg-red-50" type="submit">Vaciar carrito</button>
+        </form>
+      </div>
       <div class="text-right">
         <div class="text-lg font-semibold">Total: ${{ '%.2f'|format(total) }}</div>
       </div>
@@ -63,7 +72,7 @@
       </div>
       <div>
         <label class="block text-sm text-gray-600">Responsable de la venta</label>
-        <select name="responsible" class="input-field w-full rounded px-3 py-2">
+        <select name="responsible" class="input-field w-full rounded px-3 py-2" required>
           <option value="">-- Seleccionar --</option>
           <option value="Pablo" {% if sales_responsible=='Pablo' %}selected{% endif %}>Pablo</option>
           <option value="Sergio" {% if sales_responsible=='Sergio' %}selected{% endif %}>Sergio</option>
