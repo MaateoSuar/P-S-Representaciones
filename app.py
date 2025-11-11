@@ -100,6 +100,13 @@ def _get_engine():
                 )
                 """
             ))
+            # Ensure pdf_data column exists to persist PDF bytes
+            conn.execute(_sql_text(
+                """
+                ALTER TABLE historial
+                ADD COLUMN IF NOT EXISTS pdf_data BYTEA
+                """
+            ))
         return _ENGINE
     except Exception:
         _ENGINE = None
@@ -216,7 +223,7 @@ def _parse_dt(value) -> datetime:
     return datetime.now(timezone.utc)
 
 
-def db_upsert_history(order: dict | None):
+def db_upsert_history(order: dict | None, pdf_bytes: bytes | None = None):
     eng = _get_engine()
     if not eng or not order:
         return False
@@ -236,22 +243,41 @@ def db_upsert_history(order: dict | None):
     if not params["order_id"]:
         return False
     with eng.begin() as conn:
-        conn.execute(_sql_text(
-            """
-            INSERT INTO historial (order_id, client_name, client_email, responsible, created_at, total, state, pdf_filename, data, updated_at)
-            VALUES (:order_id, :client_name, :client_email, :responsible, :created_at, :total, :state, :pdf_filename, CAST(:data AS JSONB), NOW())
-            ON CONFLICT (order_id) DO UPDATE SET
-              client_name = EXCLUDED.client_name,
-              client_email = EXCLUDED.client_email,
-              responsible = EXCLUDED.responsible,
-              created_at = EXCLUDED.created_at,
-              total = EXCLUDED.total,
-              state = EXCLUDED.state,
-              pdf_filename = EXCLUDED.pdf_filename,
-              data = EXCLUDED.data,
-              updated_at = NOW()
-            """
-        ), params)
+        if pdf_bytes is None:
+            conn.execute(_sql_text(
+                """
+                INSERT INTO historial (order_id, client_name, client_email, responsible, created_at, total, state, pdf_filename, data, updated_at)
+                VALUES (:order_id, :client_name, :client_email, :responsible, :created_at, :total, :state, :pdf_filename, CAST(:data AS JSONB), NOW())
+                ON CONFLICT (order_id) DO UPDATE SET
+                  client_name = EXCLUDED.client_name,
+                  client_email = EXCLUDED.client_email,
+                  responsible = EXCLUDED.responsible,
+                  created_at = EXCLUDED.created_at,
+                  total = EXCLUDED.total,
+                  state = EXCLUDED.state,
+                  pdf_filename = EXCLUDED.pdf_filename,
+                  data = EXCLUDED.data,
+                  updated_at = NOW()
+                """
+            ), params)
+        else:
+            conn.execute(_sql_text(
+                """
+                INSERT INTO historial (order_id, client_name, client_email, responsible, created_at, total, state, pdf_filename, data, pdf_data, updated_at)
+                VALUES (:order_id, :client_name, :client_email, :responsible, :created_at, :total, :state, :pdf_filename, CAST(:data AS JSONB), :pdf_data, NOW())
+                ON CONFLICT (order_id) DO UPDATE SET
+                  client_name = EXCLUDED.client_name,
+                  client_email = EXCLUDED.client_email,
+                  responsible = EXCLUDED.responsible,
+                  created_at = EXCLUDED.created_at,
+                  total = EXCLUDED.total,
+                  state = EXCLUDED.state,
+                  pdf_filename = EXCLUDED.pdf_filename,
+                  data = EXCLUDED.data,
+                  pdf_data = EXCLUDED.pdf_data,
+                  updated_at = NOW()
+                """
+            ), {**params, "pdf_data": pdf_bytes})
     return True
 
 
@@ -286,10 +312,18 @@ def _sync_history_from_files(force: bool = False):
             candidate = f"remito-{order_id}.pdf"
             if os.path.isfile(os.path.join(PDF_DIR, candidate)):
                 pdf_name = candidate
+        pdf_bytes = None
         if pdf_name:
             data["pdf_filename"] = pdf_name
+            pdf_path = os.path.join(PDF_DIR, pdf_name)
+            if os.path.isfile(pdf_path):
+                try:
+                    with open(pdf_path, "rb") as pf:
+                        pdf_bytes = pf.read()
+                except Exception:
+                    pdf_bytes = None
         try:
-            db_upsert_history(data)
+            db_upsert_history(data, pdf_bytes=pdf_bytes)
         except Exception:
             continue
     _HISTORY_SYNCED = True
@@ -869,7 +903,13 @@ def checkout():
             json.dump(order, f, ensure_ascii=False, indent=2)
         if db_enabled():
             try:
-                db_upsert_history(order)
+                pdf_bytes = None
+                try:
+                    with open(pdf_path, "rb") as pf:
+                        pdf_bytes = pf.read()
+                except Exception:
+                    pdf_bytes = None
+                db_upsert_history(order, pdf_bytes=pdf_bytes)
             except Exception:
                 pass
         # Clear edit flag after saving
@@ -909,7 +949,13 @@ def checkout():
             pass
         if db_enabled():
             try:
-                db_upsert_history(order_record)
+                pdf_bytes = None
+                try:
+                    with open(pdf_path, "rb") as pf:
+                        pdf_bytes = pf.read()
+                except Exception:
+                    pdf_bytes = None
+                db_upsert_history(order_record, pdf_bytes=pdf_bytes)
             except Exception:
                 pass
 
@@ -1067,7 +1113,27 @@ def send_remito_email(to_email: str, pdf_path: str, order: dict):
 
 @app.route("/remitos/<path:filename>")
 def download_remito(filename):
-    return send_from_directory(PDF_DIR, filename, as_attachment=True)
+    # Try local file first
+    local_path = os.path.join(PDF_DIR, filename)
+    if os.path.isfile(local_path):
+        return send_from_directory(PDF_DIR, filename, as_attachment=True)
+    # Fallback to DB if available
+    if db_enabled():
+        try:
+            eng = _get_engine()
+            with eng.begin() as conn:
+                row = conn.execute(_sql_text(
+                    "SELECT pdf_data FROM historial WHERE pdf_filename = :fn"
+                ), {"fn": filename}).first()
+            if row and row[0]:
+                buf = BytesIO(row[0])
+                buf.seek(0)
+                return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=filename)
+        except Exception:
+            pass
+    # Not found
+    flash("Archivo de remito no disponible", "error")
+    return redirect(url_for("history"))
 
 
 @app.route("/history")
