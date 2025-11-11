@@ -1589,12 +1589,13 @@ def products_export_pdf():
     df = df.copy()
     df["final_price"] = (df["cost"] * (1 + margin / 100)).round(2)
 
-    buf = _generate_pdf_product_list(df.to_dict(orient="records"), margin)
-    filename = f"Catalogo - {datetime.now().strftime('%Y%m%d-%H%M')}.pdf"
+    sheet_display = "Productos Generales" if sheet_name == "generales" else "Ansioliticos"
+    buf = _generate_pdf_product_list(df.to_dict(orient="records"), margin, sheet_display)
+    filename = f"Catalogo - {sheet_display} - {datetime.now().strftime('%Y%m%d-%H%M')}.pdf"
     return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=filename)
 
 
-def _generate_pdf_product_list(products: list, margin: float) -> BytesIO:
+def _generate_pdf_product_list(products: list, margin: float, sheet_name: str = "") -> BytesIO:
     cbuf = BytesIO()
     c = canvas.Canvas(cbuf, pagesize=A4)
     width, height = A4
@@ -1606,7 +1607,8 @@ def _generate_pdf_product_list(products: list, margin: float) -> BytesIO:
 
     y = height - margin_mm
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(margin_mm, y, "Lista de productos")
+    title = f"Lista de Productos - {sheet_name}" if sheet_name else "Lista de productos"
+    c.drawString(margin_mm, y, title)
     y -= 10 * mm
     c.setFont("Helvetica", 10)
     c.drawString(margin_mm, y, f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
