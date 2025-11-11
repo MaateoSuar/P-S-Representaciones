@@ -549,48 +549,72 @@ def inject_globals():
 def dashboard():
     df = load_products()
     clients = load_clients()
-    # Compute stats and time series from orders directory
     from collections import defaultdict
     today_str = date.today().isoformat()
     ventas_hoy = 0.0
     clientes_hoy_set = set()
-    # Per-day aggregations
     sales_by_day = defaultdict(float)
-    clients_by_day = defaultdict(set)  # sets of client names per day
-    margin_val_by_day = defaultdict(float)  # absolute margin value per day
-    sales_val_by_day = defaultdict(float)   # absolute sales value per day
-    if os.path.isdir(ORDERS_DIR):
-        for fname in os.listdir(ORDERS_DIR):
-            if not fname.endswith(".json"):
-                continue
-            try:
-                with open(os.path.join(ORDERS_DIR, fname), "r", encoding="utf-8") as f:
-                    order = json.load(f)
-                created = order.get("created_at", "")
-                client_name = (order.get("client_name") or "").strip()
-                if len(created) >= 10:
-                    day = created[:10]
-                    total = float(order.get("total", 0.0))
-                    sales_by_day[day] += total
-                    if client_name:
-                        clients_by_day[day].add(client_name)
-                if created.startswith(today_str):
-                    ventas_hoy += float(order.get("total", 0.0))
-                    if client_name:
-                        clientes_hoy_set.add(client_name)
-                # Margin computation per item by day
-                for it in order.get("items", []):
+    clients_by_day = defaultdict(set)
+    margin_val_by_day = defaultdict(float)
+    sales_val_by_day = defaultdict(float)
+    if db_enabled():
+        _sync_history_from_files()
+        rows = db_list_history("") or []
+        for r in rows:
+            created = str(r.get("created_at") or "")
+            client_name = (r.get("client_name") or "").strip()
+            total = float(r.get("total") or 0.0)
+            day = created[:10] if len(created) >= 10 else None
+            if day:
+                sales_by_day[day] += total
+                if client_name:
+                    clients_by_day[day].add(client_name)
+            if created.startswith(today_str):
+                ventas_hoy += total
+                if client_name:
+                    clientes_hoy_set.add(client_name)
+            for it in (r.get("items") or []):
+                try:
                     qty = float(it.get("qty", 0))
                     price = float(it.get("final_price", 0))
                     cost = float(it.get("cost", 0))
-                    margin_val = max(price - cost, 0) * qty
-                    created_day = created[:10] if len(created) >= 10 else None
-                    if created_day:
-                        margin_val_by_day[created_day] += margin_val
-                        sales_val_by_day[created_day] += price * qty
-            except Exception:
-                continue
-    # Today's KPI values
+                except Exception:
+                    qty = 0.0; price = 0.0; cost = 0.0
+                margin_val = max(price - cost, 0) * qty
+                if day:
+                    margin_val_by_day[day] += margin_val
+                    sales_val_by_day[day] += price * qty
+    else:
+        if os.path.isdir(ORDERS_DIR):
+            for fname in os.listdir(ORDERS_DIR):
+                if not fname.endswith(".json"):
+                    continue
+                try:
+                    with open(os.path.join(ORDERS_DIR, fname), "r", encoding="utf-8") as f:
+                        order = json.load(f)
+                    created = order.get("created_at", "")
+                    client_name = (order.get("client_name") or "").strip()
+                    if len(created) >= 10:
+                        day = created[:10]
+                        total = float(order.get("total", 0.0))
+                        sales_by_day[day] += total
+                        if client_name:
+                            clients_by_day[day].add(client_name)
+                    if created.startswith(today_str):
+                        ventas_hoy += float(order.get("total", 0.0))
+                        if client_name:
+                            clientes_hoy_set.add(client_name)
+                    for it in order.get("items", []):
+                        qty = float(it.get("qty", 0))
+                        price = float(it.get("final_price", 0))
+                        cost = float(it.get("cost", 0))
+                        margin_val = max(price - cost, 0) * qty
+                        created_day = created[:10] if len(created) >= 10 else None
+                        if created_day:
+                            margin_val_by_day[created_day] += margin_val
+                            sales_val_by_day[created_day] += price * qty
+                except Exception:
+                    continue
     clientes_hoy = len(clientes_hoy_set)
     sales_today_val = ventas_hoy
     sales_today_base = sales_val_by_day.get(today_str, 0.0)
