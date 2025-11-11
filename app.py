@@ -12,6 +12,7 @@ import smtplib
 from email.message import EmailMessage
 import sqlalchemy as sa
 from sqlalchemy import text as _sql_text
+import urllib.parse as _up
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret-change-me")
 DATA_CSV_PATH = os.environ.get("PRODUCTS_CSV", os.path.join(os.path.dirname(__file__), "data", "products.csv"))
@@ -43,6 +44,15 @@ def _get_engine():
         return None
     if url.startswith("postgres://"):
         url = "postgresql+psycopg2://" + url[len("postgres://"):]
+    # Ensure SSL for managed providers like Railway
+    try:
+        parsed = _up.urlsplit(url)
+        q = _up.parse_qs(parsed.query)
+        if parsed.scheme.startswith("postgresql") and "sslmode" not in {k.lower() for k in q.keys()}:
+            new_query = parsed.query + ("&" if parsed.query else "") + "sslmode=require"
+            url = _up.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
+    except Exception:
+        pass
     try:
         _ENGINE = sa.create_engine(url, pool_pre_ping=True)
         with _ENGINE.begin() as conn:
@@ -676,7 +686,7 @@ def generate_pdf_remito(pdf_path: str, order: dict):
     y -= 10 * mm
 
     c.setFont("Helvetica", 10)
-    c.drawString(margin, y, "Pablo y Sergio Representaciones")
+    c.drawString(margin, y, "SP Distribuciones")
     y -= 6 * mm
     c.drawString(margin, y, f"Fecha: {order['created_at'][:19].replace('T', ' ')}")
     y -= 6 * mm
@@ -1113,7 +1123,7 @@ def _generate_pdf_product_list(products: list, margin: float) -> BytesIO:
 
     y = height - margin_mm
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(margin_mm, y, f"Lista de productos (margen {margin:.1f}%)")
+    c.drawString(margin_mm, y, "Lista de productos")
     y -= 10 * mm
     c.setFont("Helvetica", 10)
     c.drawString(margin_mm, y, f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
