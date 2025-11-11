@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from flask import Flask, render_template, request, redirect, url_for, session, send_from_directory, flash, jsonify, send_file
 import pandas as pd
 from reportlab.lib.pagesizes import A4
@@ -80,6 +80,22 @@ def _get_engine():
                   default_margin DOUBLE PRECISION,
                   notes TEXT,
                   created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            ))
+            conn.execute(_sql_text(
+                """
+                CREATE TABLE IF NOT EXISTS historial (
+                  order_id TEXT PRIMARY KEY,
+                  client_name TEXT,
+                  client_email TEXT,
+                  responsible TEXT,
+                  created_at TIMESTAMPTZ DEFAULT NOW(),
+                  total DOUBLE PRECISION,
+                  state TEXT,
+                  pdf_filename TEXT,
+                  data JSONB,
+                  updated_at TIMESTAMPTZ DEFAULT NOW()
                 )
                 """
             ))
@@ -176,6 +192,135 @@ def db_delete_client(cid: int):
     with eng.begin() as conn:
         conn.execute(_sql_text("DELETE FROM clients WHERE id = :id"), {"id": cid})
         return True
+
+
+def _ensure_aware(dt: datetime | None) -> datetime:
+    if dt is None:
+        return datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _parse_dt(value) -> datetime:
+    if isinstance(value, datetime):
+        return _ensure_aware(value)
+    if isinstance(value, str):
+        try:
+            iso = value.replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(iso)
+            return _ensure_aware(parsed)
+        except Exception:
+            return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc)
+
+
+def db_upsert_history(order: dict | None):
+    eng = _get_engine()
+    if not eng or not order:
+        return False
+    created_at_raw = order.get("created_at")
+    created_dt = _parse_dt(created_at_raw)
+    params = {
+        "order_id": order.get("order_id"),
+        "client_name": order.get("client_name"),
+        "client_email": order.get("client_email"),
+        "responsible": order.get("responsible"),
+        "created_at": created_dt,
+        "total": float(order.get("total", 0) or 0),
+        "state": order.get("state"),
+        "pdf_filename": order.get("pdf_filename"),
+        "data": json.dumps(order, ensure_ascii=False),
+    }
+    if not params["order_id"]:
+        return False
+    with eng.begin() as conn:
+        conn.execute(_sql_text(
+            """
+            INSERT INTO historial (order_id, client_name, client_email, responsible, created_at, total, state, pdf_filename, data, updated_at)
+            VALUES (:order_id, :client_name, :client_email, :responsible, :created_at, :total, :state, :pdf_filename, CAST(:data AS JSONB), NOW())
+            ON CONFLICT (order_id) DO UPDATE SET
+              client_name = EXCLUDED.client_name,
+              client_email = EXCLUDED.client_email,
+              responsible = EXCLUDED.responsible,
+              created_at = EXCLUDED.created_at,
+              total = EXCLUDED.total,
+              state = EXCLUDED.state,
+              pdf_filename = EXCLUDED.pdf_filename,
+              data = EXCLUDED.data,
+              updated_at = NOW()
+            """
+        ), params)
+    return True
+
+
+def db_delete_history(order_id: str):
+    eng = _get_engine()
+    if not eng or not order_id:
+        return False
+    with eng.begin() as conn:
+        conn.execute(_sql_text("DELETE FROM historial WHERE order_id = :order_id"), {"order_id": order_id})
+    return True
+
+
+def db_list_history(q: str = ""):
+    eng = _get_engine()
+    if not eng:
+        return None
+    params = {}
+    sql = """
+        SELECT order_id, client_name, client_email, responsible, created_at, total, state, pdf_filename, data
+        FROM historial
+    """
+    q = (q or "").strip()
+    if q:
+        sql += " WHERE lower(client_name) LIKE :q"
+        params["q"] = f"%{q.lower()}%"
+    sql += " ORDER BY created_at DESC, order_id DESC"
+    with eng.begin() as conn:
+        rows = conn.execute(_sql_text(sql), params).mappings().all()
+    result = []
+    for r in rows:
+        data_obj = r.get("data")
+        if isinstance(data_obj, str):
+            try:
+                data_obj = json.loads(data_obj)
+            except Exception:
+                data_obj = {}
+        data_obj = data_obj or {}
+        created_at = r.get("created_at")
+        if isinstance(created_at, datetime):
+            try:
+                created_display = created_at.astimezone(timezone.utc).strftime("%d/%m/%Y")
+            except Exception:
+                created_display = created_at.strftime("%d/%m/%Y")
+        else:
+            created_display = ""
+        pdf_name = r.get("pdf_filename") or data_obj.get("pdf_filename")
+        if not pdf_name:
+            legacy = f"remito-{r.get('order_id')}.pdf"
+            pdf_name = legacy
+        if pdf_name:
+            pdf_path = os.path.join(PDF_DIR, pdf_name)
+            if not os.path.exists(pdf_path):
+                pdf_name = None
+        filename = data_obj.get("filename") or f"{r.get('order_id')}.json"
+        if filename:
+            file_path = os.path.join(ORDERS_DIR, filename)
+            if not os.path.exists(file_path):
+                filename = filename  # keep reference even if missing
+        result.append({
+            "order_id": r.get("order_id"),
+            "created_at": created_at.isoformat() if isinstance(created_at, datetime) else str(created_at or ""),
+            "created_display": created_display,
+            "client_name": r.get("client_name"),
+            "responsible": r.get("responsible"),
+            "total": float(r.get("total") or 0),
+            "pdf_name": pdf_name,
+            "filename": filename,
+            "state": r.get("state") or data_obj.get("state"),
+        })
+    return result
 
 def load_clients():
     if not os.path.exists(CLIENTS_PATH):
@@ -656,6 +801,11 @@ def checkout():
         order["pdf_filename"] = pdf_filename
         with open(fpath, "w", encoding="utf-8") as f:
             json.dump(order, f, ensure_ascii=False, indent=2)
+        if db_enabled():
+            try:
+                db_upsert_history(order)
+            except Exception:
+                pass
         # Clear edit flag after saving
         session.pop("edit_order_id", None)
     else:
@@ -679,6 +829,8 @@ def checkout():
         pdf_path = os.path.join(PDF_DIR, pdf_filename)
         generate_pdf_remito(pdf_path, order)
         # update order with pdf filename for later use
+        order_record = dict(order)
+        order_record["pdf_filename"] = pdf_filename
         try:
             ofile = os.path.join(ORDERS_DIR, f"{order_id}.json")
             with open(ofile, "r", encoding="utf-8") as f:
@@ -686,8 +838,14 @@ def checkout():
             saved["pdf_filename"] = pdf_filename
             with open(ofile, "w", encoding="utf-8") as f:
                 json.dump(saved, f, ensure_ascii=False, indent=2)
+            order_record = saved
         except Exception:
             pass
+        if db_enabled():
+            try:
+                db_upsert_history(order_record)
+            except Exception:
+                pass
 
     # Optional email automation if SMTP configured and email provided
     if client_email and os.environ.get("SMTP_HOST"):
@@ -850,60 +1008,61 @@ def download_remito(filename):
 def history():
     """List saved orders for demo purposes."""
     import json
+    raw_q = request.args.get("q", "").strip()
+    q_lower = raw_q.lower()
     orders = []
-    if os.path.isdir(ORDERS_DIR):
-        for fname in os.listdir(ORDERS_DIR):
-            if not fname.endswith(".json"):
-                continue
-            fpath = os.path.join(ORDERS_DIR, fname)
-            try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                order_id = data.get("order_id", os.path.splitext(fname)[0])
-                created_at = data.get("created_at", "")
-                # Build display date as DD/MM/AAAA
-                created_display = ""
+    if db_enabled():
+        orders = db_list_history(raw_q) or []
+    else:
+        if os.path.isdir(ORDERS_DIR):
+            for fname in os.listdir(ORDERS_DIR):
+                if not fname.endswith(".json"):
+                    continue
+                fpath = os.path.join(ORDERS_DIR, fname)
                 try:
-                    if created_at:
-                        dt = datetime.fromisoformat(created_at)
-                        created_display = dt.strftime("%d/%m/%Y")
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    order_id = data.get("order_id", os.path.splitext(fname)[0])
+                    created_at = data.get("created_at", "")
+                    created_display = ""
+                    try:
+                        if created_at:
+                            dt = datetime.fromisoformat(created_at)
+                            created_display = dt.strftime("%d/%m/%Y")
+                    except Exception:
+                        created_display = created_at[:10]
+                    client_name = data.get("client_name", "")
+                    total = data.get("total", 0)
+                    responsible = data.get("responsible", "")
+                    pdf_name = data.get("pdf_filename")
+                    if pdf_name:
+                        pdf_exists = os.path.exists(os.path.join(PDF_DIR, pdf_name))
+                    else:
+                        legacy = f"remito-{order_id}.pdf"
+                        pdf_exists = os.path.exists(os.path.join(PDF_DIR, legacy))
+                        pdf_name = legacy if pdf_exists else None
+                    orders.append({
+                        "order_id": order_id,
+                        "created_at": created_at,
+                        "created_display": created_display,
+                        "client_name": client_name,
+                        "responsible": responsible,
+                        "total": total,
+                        "pdf_name": pdf_name if pdf_exists else None,
+                        "filename": fname,
+                    })
                 except Exception:
-                    created_display = created_at[:10]
-                client_name = data.get("client_name", "")
-                total = data.get("total", 0)
-                responsible = data.get("responsible", "")
-                # Prefer stored filename, else fallback to old naming
-                pdf_name = data.get("pdf_filename")
-                if pdf_name:
-                    pdf_exists = os.path.exists(os.path.join(PDF_DIR, pdf_name))
-                else:
-                    legacy = f"remito-{order_id}.pdf"
-                    pdf_exists = os.path.exists(os.path.join(PDF_DIR, legacy))
-                    pdf_name = legacy if pdf_exists else None
-                orders.append({
-                    "order_id": order_id,
-                    "created_at": created_at,
-                    "created_display": created_display,
-                    "client_name": client_name,
-                    "responsible": responsible,
-                    "total": total,
-                    "pdf_name": pdf_name if pdf_exists else None,
-                    "filename": fname,
-                })
-            except Exception:
-                continue
-    # Optional filter by client name substring (case-insensitive)
-    q = request.args.get("q", "").strip().lower()
-    if q:
-        orders = [o for o in orders if q in (o.get("client_name", "").lower())]
-    # Sort by created_at/order_id desc
-    orders.sort(key=lambda x: (x.get("created_at", ""), x.get("order_id", "")), reverse=True)
-    return render_template("history.html", orders=orders, q=q)
+                    continue
+        if q_lower:
+            orders = [o for o in orders if q_lower in (o.get("client_name", "").lower())]
+        orders.sort(key=lambda x: (x.get("created_at", ""), x.get("order_id", "")), reverse=True)
+    return render_template("history.html", orders=orders, q=raw_q)
 
 
 @app.route("/history/delete", methods=["POST"])
 def history_delete():
     filename = request.form.get("filename", "").strip()
+    order_id_form = request.form.get("order_id", "").strip()
     if not filename or not filename.endswith(".json"):
         flash("Archivo inválido", "error")
         return redirect(url_for("history"))
@@ -911,10 +1070,12 @@ def history_delete():
     fpath = os.path.join(ORDERS_DIR, filename)
     try:
         pdf_to_remove = None
+        order_id = order_id_form or os.path.splitext(filename)[0]
         if os.path.isfile(fpath):
             try:
                 with open(fpath, "r", encoding="utf-8") as f:
                     data = _json.load(f)
+                order_id = data.get("order_id", order_id)
                 pdf_name = data.get("pdf_filename")
                 if not pdf_name:
                     # legacy fallback
@@ -936,6 +1097,11 @@ def history_delete():
                 except Exception:
                     pass
         flash("Remito eliminado", "success")
+        if db_enabled():
+            try:
+                db_delete_history(order_id)
+            except Exception:
+                pass
     except Exception:
         flash("No se pudo eliminar el remito", "error")
     return redirect(url_for("history"))
@@ -1173,6 +1339,11 @@ def pipeline_set_state(order_id: str):
         order["state"] = new_state
         with open(fpath, "w", encoding="utf-8") as f:
             json.dump(order, f, ensure_ascii=False, indent=2)
+        if db_enabled():
+            try:
+                db_upsert_history(order)
+            except Exception:
+                pass
         flash("Estado actualizado", "success")
     except Exception:
         flash("No se pudo actualizar el estado", "error")
@@ -1331,6 +1502,11 @@ def history_edit(order_id: str):
 
             with open(fpath, "w", encoding="utf-8") as f:
                 json.dump(order, f, ensure_ascii=False, indent=2)
+            if db_enabled():
+                try:
+                    db_upsert_history(order)
+                except Exception:
+                    pass
             flash("Pedido actualizado", "success")
             return redirect(url_for("history"))
         except Exception:
