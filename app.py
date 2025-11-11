@@ -45,6 +45,7 @@ os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
 
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("RAILWAY_DATABASE_URL")
 _ENGINE = None
+_HISTORY_SYNCED = False
 
 def _get_engine():
     global _ENGINE
@@ -254,6 +255,46 @@ def db_upsert_history(order: dict | None):
     return True
 
 
+def _sync_history_from_files(force: bool = False):
+    global _HISTORY_SYNCED
+    if _HISTORY_SYNCED and not force:
+        return
+    eng = _get_engine()
+    if not eng:
+        return
+    if not os.path.isdir(ORDERS_DIR):
+        _HISTORY_SYNCED = True
+        return
+    for fname in os.listdir(ORDERS_DIR):
+        if not fname.endswith(".json"):
+            continue
+        fpath = os.path.join(ORDERS_DIR, fname)
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        order_id = data.get("order_id") or os.path.splitext(fname)[0]
+        data.setdefault("order_id", order_id)
+        data.setdefault("filename", fname)
+        if not data.get("created_at"):
+            data["created_at"] = datetime.now(timezone.utc).isoformat()
+        pdf_name = data.get("pdf_filename")
+        if not pdf_name:
+            candidate = f"remito-{order_id}.pdf"
+            if os.path.isfile(os.path.join(PDF_DIR, candidate)):
+                pdf_name = candidate
+        if pdf_name:
+            data["pdf_filename"] = pdf_name
+        try:
+            db_upsert_history(data)
+        except Exception:
+            continue
+    _HISTORY_SYNCED = True
+
+
 def db_delete_history(order_id: str):
     eng = _get_engine()
     if not eng or not order_id:
@@ -319,6 +360,7 @@ def db_list_history(q: str = ""):
             "pdf_name": pdf_name,
             "filename": filename,
             "state": r.get("state") or data_obj.get("state"),
+            "items": data_obj.get("items") if isinstance(data_obj, dict) else None,
         })
     return result
 
@@ -1012,6 +1054,7 @@ def history():
     q_lower = raw_q.lower()
     orders = []
     if db_enabled():
+        _sync_history_from_files()
         orders = db_list_history(raw_q) or []
     else:
         if os.path.isdir(ORDERS_DIR):
@@ -1292,34 +1335,62 @@ def pipeline_view():
         day_sel = int(day_q) if day_q else None
     except ValueError:
         day_sel = None
-    if os.path.isdir(ORDERS_DIR):
-        for fname in os.listdir(ORDERS_DIR):
-            if not fname.endswith(".json"):
-                continue
-            try:
-                with open(os.path.join(ORDERS_DIR, fname), "r", encoding="utf-8") as f:
-                    order = json.load(f)
-                state = order.get("state", "Pedido")
-                # Map legacy states to current pipeline
-                if state in ("Oportunidad", "Remito"):
-                    state = "Pedido"
-                if state not in columns:
-                    state = "Pedido"
-                # Apply date filters ONLY to 'Cobrado'
-                if state == "Cobrado" and (month_sel or day_sel):
-                    created_at = order.get("created_at", "")
-                    try:
-                        dt = datetime.fromisoformat(created_at)
-                        if month_sel and dt.month != month_sel:
-                            continue
-                        if day_sel and dt.day != day_sel:
-                            continue
-                    except Exception:
-                        # If cannot parse date and filtering requested, skip only for Cobrado
+    if db_enabled():
+        # Ensure DB contains existing file-based orders once
+        _sync_history_from_files()
+        rows = db_list_history("") or []
+        for r in rows:
+            state = (r.get("state") or "Pedido") or "Pedido"
+            if state in ("Oportunidad", "Remito"):
+                state = "Pedido"
+            if state not in columns:
+                state = "Pedido"
+            # Apply date filters ONLY to 'Cobrado'
+            if state == "Cobrado" and (month_sel or day_sel):
+                created_at = r.get("created_at", "")
+                try:
+                    dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    if month_sel and dt.month != month_sel:
                         continue
-                columns[state].append(order)
-            except Exception:
-                continue
+                    if day_sel and dt.day != day_sel:
+                        continue
+                except Exception:
+                    continue
+            columns[state].append({
+                "order_id": r.get("order_id"),
+                "client_name": r.get("client_name"),
+                "created_at": r.get("created_at"),
+                "total": r.get("total"),
+                "responsible": r.get("responsible"),
+                "state": state,
+                "pdf_filename": r.get("pdf_name") or r.get("pdf_filename"),
+            })
+    else:
+        if os.path.isdir(ORDERS_DIR):
+            for fname in os.listdir(ORDERS_DIR):
+                if not fname.endswith(".json"):
+                    continue
+                try:
+                    with open(os.path.join(ORDERS_DIR, fname), "r", encoding="utf-8") as f:
+                        order = json.load(f)
+                    state = order.get("state", "Pedido")
+                    if state in ("Oportunidad", "Remito"):
+                        state = "Pedido"
+                    if state not in columns:
+                        state = "Pedido"
+                    if state == "Cobrado" and (month_sel or day_sel):
+                        created_at = order.get("created_at", "")
+                        try:
+                            dt = datetime.fromisoformat(created_at)
+                            if month_sel and dt.month != month_sel:
+                                continue
+                            if day_sel and dt.day != day_sel:
+                                continue
+                        except Exception:
+                            continue
+                    columns[state].append(order)
+                except Exception:
+                    continue
     # Sort each column by created_at desc
     for k in columns:
         columns[k].sort(key=lambda o: o.get("created_at", ""), reverse=True)
