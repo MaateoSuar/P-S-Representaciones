@@ -32,6 +32,13 @@ ORDERS_DIR = os.path.join(BASE_DIR, "orders")
 os.makedirs(PDF_DIR, exist_ok=True)
 os.makedirs(ORDERS_DIR, exist_ok=True)
 
+# In-process cache for products to avoid reloading/normalizing on each request
+_PRODUCTS_CACHE = {
+    "df": None,
+    "ts": None,
+    "ttl": int(os.environ.get("PRODUCTS_CACHE_TTL", "300")),  # seconds
+}
+
 # Simple JSON persistence for clients
 CLIENTS_PATH = os.path.join(BASE_DIR, "data", "clients.json")
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
@@ -309,7 +316,21 @@ def load_products() -> pd.DataFrame:
     # Drop rows without name or cost not parsed
     df = df.dropna(subset=["name", "cost"]).reset_index(drop=True)
     df["id"] = df.index.astype(int)
-    return df[["id", "name", "cost", "vencimiento"]]
+    # Add normalized name for quick case-insensitive filtering
+    df["name_lc"] = df["name"].astype(str).str.lower()
+    return df[["id", "name", "name_lc", "cost", "vencimiento"]]
+
+def load_products_cached() -> pd.DataFrame:
+    """Return products DataFrame using in-memory cache with TTL."""
+    import time as _time
+    now = int(_time.time())
+    ttl = _PRODUCTS_CACHE.get("ttl") or 0
+    if _PRODUCTS_CACHE.get("df") is not None and _PRODUCTS_CACHE.get("ts") and (now - _PRODUCTS_CACHE["ts"] < ttl):
+        return _PRODUCTS_CACHE["df"]
+    df = load_products()
+    _PRODUCTS_CACHE["df"] = df
+    _PRODUCTS_CACHE["ts"] = now
+    return df
 
 
 def get_cart():
@@ -409,8 +430,19 @@ def dashboard():
 
 @app.route("/api/products")
 def api_products():
-    df = load_products()
+    df = load_products_cached()
     q = request.args.get("q", "").strip().lower()
+    # Pagination params
+    try:
+        page = int(request.args.get("page", "1"))
+    except ValueError:
+        page = 1
+    try:
+        per_page = int(request.args.get("per_page", "20"))
+    except ValueError:
+        per_page = 20
+    page = max(page, 1)
+    per_page = max(min(per_page, 500), 1)  # cap per_page to a reasonable number
     # If a client name is provided, set it as active in session (name/email/margin)
     client_name_param = request.args.get("client", "").strip()
     if client_name_param:
@@ -443,15 +475,26 @@ def api_products():
         margin = session.get("current_client_margin", 20.0)
     margin = float(margin or 0)
     if q:
-        df = df[df["name"].str.lower().str.contains(q)]
-    df = df.copy()
-    df["final_price"] = (df["cost"] * (1 + margin / 100)).round(2)
+        # filter by precomputed lowercase column
+        df = df[df["name_lc"].str.contains(q)]
+    # Paginate first, then compute price only for the slice
+    # Global filter already applied above; now paginate
+    total_count = len(df)
+    total_pages = (total_count + per_page - 1) // per_page if per_page > 0 else 1
+    start = (page - 1) * per_page
+    end = start + per_page
+    df_page = df.iloc[start:end].copy() if total_count > 0 else df.iloc[0:0].copy()
+    df_page["final_price"] = (df_page["cost"] * (1 + margin / 100)).round(2)
     return jsonify({
-        "products": df.to_dict(orient="records"),
+        "products": df_page[["id","name","vencimiento","cost","final_price"]].to_dict(orient="records"),
         "margin": margin,
         "current_client_name": session.get("current_client_name"),
         "current_client_email": session.get("current_client_email"),
         "cart_count": sum(int(i.get("qty", 0)) for i in session.get("cart", [])),
+        "page": page,
+        "per_page": per_page,
+        "total_count": int(total_count),
+        "total_pages": int(total_pages),
     })
 
 
@@ -477,7 +520,7 @@ def cart_add():
         flash("Debe seleccionar un cliente registrado antes de agregar al carrito", "error")
         return redirect(url_for("products"))
 
-    df = load_products()
+    df = load_products_cached()
     pid = int(request.form.get("id"))
     qty = max(1, int(request.form.get("qty", 1)))
     margin = float(request.form.get("margin", 20.0))
@@ -1009,29 +1052,49 @@ def clients_delete(cid: int):
 # Apply client default margin on products list if available
 @app.route("/products")
 def products():
-    df = load_products()
+    df = load_products_cached()
     q = request.args.get("q", "").strip().lower()
     client_query = request.args.get("client", "").strip()
+    # Pagination for initial render
+    try:
+        page = int(request.args.get("page", "1"))
+    except ValueError:
+        page = 1
+    try:
+        per_page = int(request.args.get("per_page", "20"))
+    except ValueError:
+        per_page = 20
+    page = max(page, 1)
+    per_page = max(min(per_page, 500), 1)
     # Prefer margin from query, else from current client, else 20
     margin = request.args.get("margin")
     if margin is None:
         margin = session.get("current_client_margin", 20.0)
     margin = float(margin or 0)
     if q:
-        df = df[df["name"].str.lower().str.contains(q)]
-    df = df.copy()
-    df["final_price"] = (df["cost"] * (1 + margin / 100)).round(2)
+        df = df[df["name_lc"].str.contains(q)]
+    # Paginate first, then compute price for the slice only
+    total_count = len(df)
+    total_pages = (total_count + per_page - 1) // per_page if per_page > 0 else 1
+    start = (page - 1) * per_page
+    end = start + per_page
+    df_page = df.iloc[start:end].copy() if total_count > 0 else df.iloc[0:0].copy()
+    df_page["final_price"] = (df_page["cost"] * (1 + margin / 100)).round(2)
     current_client_name = session.get("current_client_name")
     # Provide clients list for suggestions/validation from DB when available
     clients_src = db_list_clients("") if db_enabled() else load_clients()
     return render_template(
         "products.html",
-        products=df.to_dict(orient="records"),
+        products=df_page[["id","name","vencimiento","cost","final_price"]].to_dict(orient="records"),
         margin=margin,
         q=q,
         current_client_name=current_client_name,
         clients=clients_src,
         client=client_query,
+        page=page,
+        per_page=per_page,
+        total_count=total_count,
+        total_pages=total_pages,
     )
 
 
@@ -1115,14 +1178,14 @@ def pipeline_set_state(order_id: str):
 # Exportar listado de productos a PDF con margen elegido
 @app.route("/products/export-pdf")
 def products_export_pdf():
-    df = load_products()
+    df = load_products_cached()
     q = request.args.get("q", "").strip().lower()
     margin = request.args.get("margin")
     if margin is None:
         margin = session.get("current_client_margin", 20.0)
     margin = float(margin or 0)
     if q:
-        df = df[df["name"].str.lower().str.contains(q)]
+        df = df[df["name_lc"].str.contains(q)]
     df = df.copy()
     df["final_price"] = (df["cost"] * (1 + margin / 100)).round(2)
 

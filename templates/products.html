@@ -86,6 +86,20 @@
       </tbody>
     </table>
   </div>
+  <div class="mt-3 flex items-center justify-between" id="products-pagination" data-page="{{ page or 1 }}" data-per-page="{{ per_page or 20 }}" data-total-pages="{{ total_pages or 1 }}" data-total-count="{{ total_count or (products|length) }}">
+    <div class="text-sm text-gray-600">
+      Mostrando página <span id="pg-cur">{{ page or 1 }}</span> de <span id="pg-total">{{ total_pages or 1 }}</span> — <span id="pg-count">{{ total_count or (products|length) }}</span> productos
+    </div>
+    <div class="flex items-center gap-2">
+      <button type="button" id="pg-prev" class="px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50">Anterior</button>
+      <button type="button" id="pg-next" class="px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50">Siguiente</button>
+      <select id="pg-size" class="ml-2 input-field rounded px-2 py-1 h-[34px]">
+        {% for opt in [20,50,100,200] %}
+        <option value="{{ opt }}" {% if (per_page or 20) == opt %}selected{% endif %}>{{ opt }}/página</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
 </div>
 <script>
   (function(){
@@ -97,6 +111,13 @@
     const tbody = document.getElementById('products-body');
     const cartAddUrl = "{{ url_for('cart_add') }}";
     const navBadge = document.getElementById('nav-cart-badge');
+    const pagBox = document.getElementById('products-pagination');
+    const btnPrev = document.getElementById('pg-prev');
+    const btnNext = document.getElementById('pg-next');
+    const selSize = document.getElementById('pg-size');
+    const lblCur = document.getElementById('pg-cur');
+    const lblTot = document.getElementById('pg-total');
+    const lblCount = document.getElementById('pg-count');
     let timer;
     let allClients = [];
     try {
@@ -126,9 +147,29 @@
       box._t = setTimeout(()=> box.classList.add('hidden'), 3000);
     }
 
+    // Pagination state
+    let currentPage = pagBox ? parseInt(pagBox.getAttribute('data-page') || '1', 10) : 1;
+    let perPage = pagBox ? parseInt(pagBox.getAttribute('data-per-page') || '20', 10) : 20;
+    let totalPages = pagBox ? parseInt(pagBox.getAttribute('data-total-pages') || '1', 10) : 1;
+    let totalCount = pagBox ? parseInt(pagBox.getAttribute('data-total-count') || '0', 10) : 0;
+    function updatePaginationUI(){
+      if (!pagBox) return;
+      if (lblCur) lblCur.textContent = String(currentPage);
+      if (lblTot) lblTot.textContent = String(totalPages);
+      if (lblCount) lblCount.textContent = String(totalCount);
+      if (btnPrev) btnPrev.disabled = currentPage <= 1;
+      if (btnNext) btnNext.disabled = currentPage >= totalPages;
+      if (selSize && parseInt(selSize.value, 10) !== perPage) {
+        selSize.value = String(perPage);
+      }
+    }
+    updatePaginationUI();
+
     let fetchReason = 'search'; // 'search' | 'apply'
     async function fetchAndRender(){
       const params = new URLSearchParams({ q: qInput.value || '' });
+      params.set('page', String(currentPage));
+      params.set('per_page', String(perPage));
       if (fetchReason === 'apply') {
         params.set('margin', marginInput.value || '');
         params.set('client', clientInput.value || '');
@@ -167,6 +208,13 @@
             }
           }
         }
+        // Update pagination from response
+        if (typeof data.page !== 'undefined') currentPage = parseInt(data.page, 10) || 1;
+        if (typeof data.per_page !== 'undefined') perPage = parseInt(data.per_page, 10) || perPage;
+        if (typeof data.total_pages !== 'undefined') totalPages = parseInt(data.total_pages, 10) || 1;
+        if (typeof data.total_count !== 'undefined') totalCount = parseInt(data.total_count, 10) || 0;
+        updatePaginationUI();
+
         const rows = (data.products || []).map(p => `
           <tr data-unit-price="${Number(p.final_price ?? 0).toFixed(2)}">
             <td class="px-4 py-2">${escapeHtml(p.name ?? '')}</td>
@@ -252,7 +300,7 @@
         .replace(/'/g, '&#039;');
     }
 
-    qInput.addEventListener('input', () => { fetchReason='search'; debounceFetch(); });
+    qInput.addEventListener('input', () => { fetchReason='search'; currentPage = 1; debounceFetch(); });
     // Do not auto-fetch on margin or client typing; suggestions only
     clientInput.addEventListener('input', () => {
       // build pretty suggestions only; do not auto-activate client here
@@ -277,14 +325,14 @@
       // Block if client typed does not exist
       const typed = clientInput ? (clientInput.value||'') : '';
       if (typed && !isValidClientName(typed)) { bumpClientInput(); showTempAlert('Agregue un Cliente registrado'); return; }
-      fetchReason='apply'; fetchAndRender();
+      fetchReason='apply'; currentPage = 1; fetchAndRender();
     });
     const applyBtn = document.getElementById('apply-btn');
     if (applyBtn) applyBtn.addEventListener('click', (e)=>{
       e.preventDefault();
       const typed = clientInput ? (clientInput.value||'') : '';
       if (typed && !isValidClientName(typed)) { bumpClientInput(); showTempAlert('Agregue un Cliente registrado'); return; }
-      fetchReason='apply'; fetchAndRender();
+      fetchReason='apply'; currentPage = 1; fetchAndRender();
     });
     const exportBtn = document.getElementById('export-pdf-btn');
     if (exportBtn) exportBtn.addEventListener('click', (e)=>{
@@ -450,6 +498,23 @@
 
     // initial bind for server-rendered rows
     bindRowForms();
+
+    // Pagination controls
+    if (btnPrev) btnPrev.addEventListener('click', () => {
+      if (currentPage > 1) { currentPage -= 1; fetchReason='search'; fetchAndRender(); }
+    });
+    if (btnNext) btnNext.addEventListener('click', () => {
+      if (currentPage < totalPages) { currentPage += 1; fetchReason='search'; fetchAndRender(); }
+    });
+    if (selSize) selSize.addEventListener('change', () => {
+      const val = parseInt(selSize.value, 10);
+      if (!isNaN(val) && val > 0) {
+        perPage = val;
+        currentPage = 1;
+        fetchReason='search';
+        fetchAndRender();
+      }
+    });
   })();
 </script>
 {% endblock %}
