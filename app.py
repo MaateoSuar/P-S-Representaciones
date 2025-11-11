@@ -826,7 +826,12 @@ def cart_add():
         flash("Debe seleccionar un cliente registrado antes de agregar al carrito", "error")
         return redirect(url_for("products"))
 
-    df = load_products_cached()
+    # Get sheet parameter from form, default to "generales"
+    sheet_name = request.form.get("sheet", "generales").strip().lower()
+    if sheet_name not in ("generales", "ansioliticos"):
+        sheet_name = "generales"
+    
+    df = load_products_cached(sheet_name=sheet_name)
     pid = int(request.form.get("id"))
     qty = max(1, int(request.form.get("qty", 1)))
     margin = float(request.form.get("margin", 20.0))

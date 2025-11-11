@@ -90,6 +90,7 @@
             <form method="post" action="{{ url_for('cart_add') }}" onsubmit="return false;" class="row-add-form inline-flex items-center gap-2">
               <input type="hidden" name="id" value="{{ p.id }}" />
               <input type="hidden" name="margin" value="{{ margin }}" />
+              <input type="hidden" name="sheet" value="{{ sheet or 'generales' }}" />
               <input type="hidden" name="ajax" value="1" />
               <button class="btn-primary inline-flex items-center justify-center px-3 py-1 h-[36px] rounded add-btn" type="button">Agregar</button>
             </form>
@@ -282,6 +283,7 @@
               <form method="post" action="${cartAddUrl}" class="row-add-form inline-flex items-center gap-2" onsubmit="return false;">
                 <input type="hidden" name="id" value="${p.id}" />
                 <input type="hidden" name="margin" value="${marginInput.value}" />
+                <input type="hidden" name="sheet" value="${sheetInput ? (sheetInput.value || 'generales') : 'generales'}" />
                 <input type="hidden" name="ajax" value="1" />
                 <button class="btn-primary inline-flex items-center justify-center px-3 py-1 h-[36px] rounded add-btn" type="button">Agregar</button>
               </form>
@@ -518,6 +520,10 @@
           } catch(_) {}
           const formData = new FormData(formEl);
           formData.set('qty', String(qty));
+          // Ensure sheet parameter is included
+          if (sheetInput) {
+            formData.set('sheet', sheetInput.value || 'generales');
+          }
           try {
             const res = await fetch(cartAddUrl, { method: 'POST', body: formData, headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } });
             if (res.ok) {
