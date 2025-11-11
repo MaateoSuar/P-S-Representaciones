@@ -10,6 +10,8 @@ from io import BytesIO
 import json
 import smtplib
 from email.message import EmailMessage
+import sqlalchemy as sa
+from sqlalchemy import text as _sql_text
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret-change-me")
 DATA_CSV_PATH = os.environ.get("PRODUCTS_CSV", os.path.join(os.path.dirname(__file__), "data", "products.csv"))
@@ -28,6 +30,129 @@ os.makedirs(ORDERS_DIR, exist_ok=True)
 # Simple JSON persistence for clients
 CLIENTS_PATH = os.path.join(BASE_DIR, "data", "clients.json")
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
+
+DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("RAILWAY_DATABASE_URL")
+_ENGINE = None
+
+def _get_engine():
+    global _ENGINE
+    if _ENGINE is not None:
+        return _ENGINE
+    url = DATABASE_URL
+    if not url:
+        return None
+    if url.startswith("postgres://"):
+        url = "postgresql+psycopg2://" + url[len("postgres://"):]
+    try:
+        _ENGINE = sa.create_engine(url, pool_pre_ping=True)
+        with _ENGINE.begin() as conn:
+            conn.execute(_sql_text(
+                """
+                CREATE TABLE IF NOT EXISTS clients (
+                  id SERIAL PRIMARY KEY,
+                  name TEXT NOT NULL,
+                  zone TEXT,
+                  email TEXT,
+                  phone TEXT,
+                  default_margin DOUBLE PRECISION,
+                  notes TEXT,
+                  created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            ))
+        return _ENGINE
+    except Exception:
+        _ENGINE = None
+        return None
+
+def db_enabled():
+    return _get_engine() is not None
+
+def db_list_clients(q: str = ""):
+    eng = _get_engine()
+    if not eng:
+        return None
+    q = (q or "").strip()
+    sql = "SELECT id, name, zone, email, phone, default_margin, notes, created_at FROM clients"
+    params = {}
+    if q:
+        sql += " WHERE lower(name) LIKE :q OR lower(zone) LIKE :q"
+        params["q"] = f"%{q.lower()}%"
+    sql += " ORDER BY name ASC"
+    with eng.begin() as conn:
+        rows = conn.execute(_sql_text(sql), params).mappings().all()
+        return [dict(r) for r in rows]
+
+def db_get_client_by_id(cid: int):
+    eng = _get_engine()
+    if not eng:
+        return None
+    with eng.begin() as conn:
+        row = conn.execute(_sql_text(
+            "SELECT id, name, zone, email, phone, default_margin, notes, created_at FROM clients WHERE id = :id"
+        ), {"id": cid}).mappings().first()
+        return dict(row) if row else None
+
+def db_get_client_by_name(name: str):
+    eng = _get_engine()
+    if not eng:
+        return None
+    with eng.begin() as conn:
+        row = conn.execute(_sql_text(
+            "SELECT id, name, zone, email, phone, default_margin, notes, created_at FROM clients WHERE lower(name) = :n"
+        ), {"n": (name or "").strip().lower()}).mappings().first()
+        return dict(row) if row else None
+
+def db_insert_client(data: dict):
+    eng = _get_engine()
+    if not eng:
+        return None
+    with eng.begin() as conn:
+        row = conn.execute(_sql_text(
+            """
+            INSERT INTO clients (name, zone, email, phone, default_margin, notes)
+            VALUES (:name, :zone, :email, :phone, :default_margin, :notes)
+            RETURNING id
+            """
+        ), {
+            "name": data.get("name", ""),
+            "zone": data.get("zone"),
+            "email": data.get("email"),
+            "phone": data.get("phone"),
+            "default_margin": float(data.get("default_margin")) if data.get("default_margin") is not None else None,
+            "notes": data.get("notes"),
+        }).scalar_one()
+        return int(row)
+
+def db_update_client(cid: int, data: dict):
+    eng = _get_engine()
+    if not eng:
+        return False
+    with eng.begin() as conn:
+        conn.execute(_sql_text(
+            """
+            UPDATE clients
+            SET name = :name, zone = :zone, email = :email, phone = :phone, default_margin = :default_margin, notes = :notes
+            WHERE id = :id
+            """
+        ), {
+            "id": cid,
+            "name": data.get("name", ""),
+            "zone": data.get("zone"),
+            "email": data.get("email"),
+            "phone": data.get("phone"),
+            "default_margin": float(data.get("default_margin")) if data.get("default_margin") is not None else None,
+            "notes": data.get("notes"),
+        })
+        return True
+
+def db_delete_client(cid: int):
+    eng = _get_engine()
+    if not eng:
+        return False
+    with eng.begin() as conn:
+        conn.execute(_sql_text("DELETE FROM clients WHERE id = :id"), {"id": cid})
+        return True
 
 def load_clients():
     if not os.path.exists(CLIENTS_PATH):
@@ -274,9 +399,12 @@ def api_products():
     client_name_param = request.args.get("client", "").strip()
     if client_name_param:
         try:
-            clients = load_clients()
-            # case-insensitive match by name
-            target = next((c for c in clients if c.get("name", "").strip().lower() == client_name_param.lower()), None)
+            target = None
+            if db_enabled():
+                target = db_get_client_by_name(client_name_param)
+            else:
+                clients = load_clients()
+                target = next((c for c in clients if c.get("name", "").strip().lower() == client_name_param.lower()), None)
             if target:
                 # If client changed, clear cart
                 prev_id = session.get("current_client_id")
@@ -743,29 +871,34 @@ def history_delete():
 @app.route("/clients")
 def clients_list():
     q = request.args.get("q", "").strip().lower()
-    clients = load_clients()
-    if q:
-        clients = [c for c in clients if q in c.get("name", "").lower() or q in c.get("zone", "").lower()]
+    if db_enabled():
+        clients = db_list_clients(q)
+    else:
+        clients = load_clients()
+        if q:
+            clients = [c for c in clients if q in c.get("name", "").lower() or q in c.get("zone", "").lower()]
     return render_template("clients_list.html", clients=clients, q=q)
 
 
 @app.route("/clients/new", methods=["GET", "POST"])
 def clients_new():
     if request.method == "POST":
-        clients = load_clients()
-        new_id = (max([c.get("id", 0) for c in clients]) + 1) if clients else 1
-        client = {
-            "id": new_id,
+        data = {
             "name": request.form.get("name", "").strip(),
             "zone": request.form.get("zone", "").strip(),
             "email": request.form.get("email", "").strip(),
             "phone": request.form.get("phone", "").strip(),
             "default_margin": float(request.form.get("default_margin", "20") or 20),
             "notes": request.form.get("notes", "").strip(),
-            "created_at": datetime.now().isoformat(),
         }
-        clients.append(client)
-        save_clients(clients)
+        if db_enabled():
+            new_id = db_insert_client(data)
+        else:
+            clients = load_clients()
+            new_id = (max([c.get("id", 0) for c in clients]) + 1) if clients else 1
+            client = dict({"id": new_id, **data, "created_at": datetime.now().isoformat()})
+            clients.append(client)
+            save_clients(clients)
         flash("Cliente creado", "success")
         return redirect(url_for("clients_list"))
     return render_template("clients_form.html", client=None)
@@ -773,19 +906,29 @@ def clients_new():
 
 @app.route("/clients/<int:cid>/edit", methods=["GET", "POST"])
 def clients_edit(cid: int):
-    clients = load_clients()
-    client = next((c for c in clients if c.get("id") == cid), None)
+    client = db_get_client_by_id(cid) if db_enabled() else next((c for c in load_clients() if c.get("id") == cid), None)
     if not client:
         flash("Cliente no encontrado", "error")
         return redirect(url_for("clients_list"))
     if request.method == "POST":
-        client["name"] = request.form.get("name", client["name"]).strip()
-        client["zone"] = request.form.get("zone", client.get("zone", "")).strip()
-        client["email"] = request.form.get("email", client.get("email", "")).strip()
-        client["phone"] = request.form.get("phone", client.get("phone", "")).strip()
-        client["default_margin"] = float(request.form.get("default_margin", client.get("default_margin", 20)))
-        client["notes"] = request.form.get("notes", client.get("notes", "")).strip()
-        save_clients(clients)
+        data = {
+            "name": request.form.get("name", client["name"]).strip(),
+            "zone": request.form.get("zone", client.get("zone", "")).strip(),
+            "email": request.form.get("email", client.get("email", "")).strip(),
+            "phone": request.form.get("phone", client.get("phone", "")).strip(),
+            "default_margin": float(request.form.get("default_margin", client.get("default_margin", 20))),
+            "notes": request.form.get("notes", client.get("notes", "")).strip(),
+        }
+        if db_enabled():
+            db_update_client(cid, data)
+        else:
+            clients = load_clients()
+            idx = next((i for i, c in enumerate(clients) if c.get("id") == cid), None)
+            if idx is None:
+                flash("Cliente no encontrado", "error")
+                return redirect(url_for("clients_list"))
+            clients[idx].update(data)
+            save_clients(clients)
         flash("Cliente actualizado", "success")
         return redirect(url_for("clients_list"))
     return render_template("clients_form.html", client=client)
@@ -793,8 +936,7 @@ def clients_edit(cid: int):
 
 @app.route("/clients/<int:cid>/use", methods=["POST"]) 
 def clients_use(cid: int):
-    clients = load_clients()
-    client = next((c for c in clients if c.get("id") == cid), None)
+    client = db_get_client_by_id(cid) if db_enabled() else next((c for c in load_clients() if c.get("id") == cid), None)
     if not client:
         flash("Cliente no encontrado", "error")
         return redirect(url_for("clients_list"))
@@ -813,13 +955,19 @@ def clients_use(cid: int):
 
 @app.route("/clients/<int:cid>/delete", methods=["POST"])
 def clients_delete(cid: int):
-    clients = load_clients()
-    before = len(clients)
-    clients = [c for c in clients if c.get("id") != cid]
-    if len(clients) == before:
-        flash("Cliente no encontrado", "error")
-        return redirect(url_for("clients_list"))
-    save_clients(clients)
+    if db_enabled():
+        if not db_get_client_by_id(cid):
+            flash("Cliente no encontrado", "error")
+            return redirect(url_for("clients_list"))
+        db_delete_client(cid)
+    else:
+        clients = load_clients()
+        before = len(clients)
+        clients = [c for c in clients if c.get("id") != cid]
+        if len(clients) == before:
+            flash("Cliente no encontrado", "error")
+            return redirect(url_for("clients_list"))
+        save_clients(clients)
     # If deleted client was active, clear selection and cart
     if session.get("current_client_id") == cid:
         for key in ("current_client_id", "current_client_name", "current_client_margin", "current_client_email"):
