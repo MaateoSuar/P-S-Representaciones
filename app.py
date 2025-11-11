@@ -33,11 +33,9 @@ os.makedirs(PDF_DIR, exist_ok=True)
 os.makedirs(ORDERS_DIR, exist_ok=True)
 
 # In-process cache for products to avoid reloading/normalizing on each request
-_PRODUCTS_CACHE = {
-    "df": None,
-    "ts": None,
-    "ttl": int(os.environ.get("PRODUCTS_CACHE_TTL", "300")),  # seconds
-}
+# Cache is per sheet: {"generales": {...}, "ansioliticos": {...}}
+_PRODUCTS_CACHE = {}
+_PRODUCTS_CACHE_TTL = int(os.environ.get("PRODUCTS_CACHE_TTL", "300"))  # seconds
 
 # Simple JSON persistence for clients
 CLIENTS_PATH = os.path.join(BASE_DIR, "data", "clients.json")
@@ -459,12 +457,13 @@ def logout():
     return redirect(url_for("login"))
 
 
-def load_products() -> pd.DataFrame:
-    """Load products either from remote URL or local CSV. Expected columns: name, cost, vencimiento"""
+def load_products(sheet_name: str = "generales") -> pd.DataFrame:
+    """Load products either from remote URL or local CSV. Expected columns: name, cost, vencimiento
+    sheet_name: 'generales' or 'ansioliticos'"""
     if REMOTE_CSV_URL:
         df = pd.read_csv(REMOTE_CSV_URL)
     elif GOOGLE_SHEETS_URL:
-        # Convert a Google Sheets edit URL to a CSV export URL preserving gid
+        # Convert a Google Sheets edit URL to a CSV export URL using sheet name
         try:
             url = GOOGLE_SHEETS_URL
             # Extract doc id between /d/ and next '/'
@@ -472,12 +471,14 @@ def load_products() -> pd.DataFrame:
             if "/d/" in url:
                 part = url.split("/d/", 1)[1]
                 doc_id = part.split("/", 1)[0]
-            # Extract gid
-            import urllib.parse as _up
-            parsed = _up.urlparse(url)
-            qs = _up.parse_qs(parsed.query)
-            gid = (qs.get("gid", ["0"]) or ["0"])[0]
             if doc_id:
+                # Map sheet names to gid values
+                sheet_gid_map = {
+                    "generales": "1746527572",
+                    "ansioliticos": "524291397"
+                }
+                gid = sheet_gid_map.get(sheet_name, "1746527572")
+                # Google Sheets CSV export by gid
                 export_url = f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=csv&gid={gid}"
                 df = pd.read_csv(export_url)
             else:
@@ -493,72 +494,120 @@ def load_products() -> pd.DataFrame:
             return pd.DataFrame(columns=["name", "cost", "vencimiento"]).astype({"name": str, "cost": float, "vencimiento": str})
         df = pd.read_csv(DATA_CSV_PATH)
     # Normalize columns in case of mixed names
-    cols = {c.lower().strip(): c for c in df.columns}
-    name_col = cols.get("name") or cols.get("producto")
-    # Accept custom cost header '-3%'
-    cost_col = cols.get("cost") or cols.get("precio") or cols.get("costo") or cols.get("-3%") or cols.get("- 3%")
-    # Accept typo 'fecha vencimeinto' and broader variants
-    venc_col = (
-        cols.get("vencimiento")
-        or cols.get("fecha vencimiento")
-        or cols.get("fecha_vencimiento")
-        or cols.get("fecha vencimeinto")
-        or cols.get("vto")
-        or cols.get("fecha vto")
-    )
+    # First, try to detect column names by checking all columns (case-insensitive)
+    cols_lower = {str(c).lower().strip(): c for c in df.columns}
+    
+    # Try to find name column (product name)
+    name_col = None
+    for key in ["name", "producto", "product", "nombre", "descripcion", "descripción"]:
+        if key in cols_lower:
+            name_col = cols_lower[key]
+            break
+    # If still not found, use first column
+    if not name_col and len(df.columns) > 0:
+        name_col = df.columns[0]
+    
+    # Try to find cost column
+    cost_col = None
+    for key in ["cost", "precio", "costo", "price", "-3%", "- 3%"]:
+        if key in cols_lower:
+            cost_col = cols_lower[key]
+            break
+    # If still not found, try to find numeric columns (usually second column)
+    if not cost_col and len(df.columns) > 1:
+        # Check if second column looks numeric
+        second_col = df.columns[1]
+        if second_col != name_col:
+            try:
+                # Try to convert a sample value
+                sample_val = str(df[second_col].iloc[0] if len(df) > 0 else "")
+                if any(c.isdigit() for c in sample_val.replace(".", "").replace(",", "").replace("-", "")):
+                    cost_col = second_col
+            except:
+                pass
+    # If still not found, use second column
+    if not cost_col and len(df.columns) > 1:
+        cost_col = df.columns[1]
+    
+    # Try to find vencimiento column
+    venc_col = None
+    for key in ["vencimiento", "fecha vencimiento", "fecha_vencimiento", "fecha vencimeinto", "vto", "fecha vto", "venc", "fecha"]:
+        if key in cols_lower:
+            venc_col = cols_lower[key]
+            break
+    # If still not found, pick first column whose lowercase contains 'venc' or 'vto'
     if not venc_col:
-        # Fallback: pick first column whose lowercase contains 'venc' or 'vto'
         for c in df.columns:
             lc = str(c).strip().lower()
-            if ("venc" in lc) or ("vto" in lc) or ("venci" in lc):
+            if ("venc" in lc) or ("vto" in lc) or ("venci" in lc) or ("fecha" in lc):
                 venc_col = c
                 break
+    
+    # Rename columns to standard names
     rename_map = {}
-    if name_col and name_col != "name":
+    if name_col:
         rename_map[name_col] = "name"
-    if cost_col and cost_col != "cost":
+    if cost_col:
         rename_map[cost_col] = "cost"
-    if venc_col and venc_col != "vencimiento":
+    if venc_col:
         rename_map[venc_col] = "vencimiento"
+    
     if rename_map:
         df = df.rename(columns=rename_map)
-    # Coerce types and normalize values
-    if "name" in df:
-        df["name"] = df["name"].astype(str).str.strip()
-    if "cost" in df:
-        # Normalize common LATAM formats: "$ 1.234,56" -> "1234.56"
-        cost_s = df["cost"].astype(str).str.strip()
-        # Keep only digits, separators and sign
-        cost_s = cost_s.str.replace(r"[^0-9,.-]", "", regex=True)
-        # If there is a comma, treat '.' as thousands separator and remove it
-        has_comma = cost_s.str.contains(",")
-        cost_s = cost_s.where(~has_comma, cost_s.str.replace(r"\.(?=\d{3}(\D|$))", "", regex=True))
-        # Replace comma decimal with dot
-        cost_s = cost_s.str.replace(",", ".", regex=False)
-        df["cost"] = pd.to_numeric(cost_s, errors="coerce")
-    if "vencimiento" in df:
-        # Normalize NaN to empty and keep as string
-        df["vencimiento"] = df["vencimiento"].fillna("").astype(str)
-    else:
-        # Ensure column exists for downstream consumers
+    
+    # Ensure required columns exist, create empty ones if missing
+    if "name" not in df.columns:
+        if len(df.columns) > 0:
+            df["name"] = df.iloc[:, 0].astype(str)
+        else:
+            df["name"] = ""
+    if "cost" not in df.columns:
+        if len(df.columns) > 1:
+            df["cost"] = df.iloc[:, 1]
+        else:
+            df["cost"] = 0.0
+    if "vencimiento" not in df.columns:
         df["vencimiento"] = ""
+    
+    # Coerce types and normalize values
+    df["name"] = df["name"].astype(str).str.strip()
+    
+    # Normalize cost: handle LATAM formats "$ 1.234,56" -> "1234.56"
+    cost_s = df["cost"].astype(str).str.strip()
+    # Keep only digits, separators and sign
+    cost_s = cost_s.str.replace(r"[^0-9,.-]", "", regex=True)
+    # If there is a comma, treat '.' as thousands separator and remove it
+    has_comma = cost_s.str.contains(",")
+    cost_s = cost_s.where(~has_comma, cost_s.str.replace(r"\.(?=\d{3}(\D|$))", "", regex=True))
+    # Replace comma decimal with dot
+    cost_s = cost_s.str.replace(",", ".", regex=False)
+    df["cost"] = pd.to_numeric(cost_s, errors="coerce")
+    
+    # Normalize vencimiento
+    df["vencimiento"] = df["vencimiento"].fillna("").astype(str)
+    
     # Drop rows without name or cost not parsed
     df = df.dropna(subset=["name", "cost"]).reset_index(drop=True)
+    
+    # Only proceed if we have data
+    if len(df) == 0:
+        return pd.DataFrame(columns=["id", "name", "name_lc", "cost", "vencimiento"]).astype({"id": int, "name": str, "name_lc": str, "cost": float, "vencimiento": str})
+    
     df["id"] = df.index.astype(int)
     # Add normalized name for quick case-insensitive filtering
     df["name_lc"] = df["name"].astype(str).str.lower()
     return df[["id", "name", "name_lc", "cost", "vencimiento"]]
 
-def load_products_cached() -> pd.DataFrame:
-    """Return products DataFrame using in-memory cache with TTL."""
+def load_products_cached(sheet_name: str = "generales") -> pd.DataFrame:
+    """Return products DataFrame using in-memory cache with TTL, per sheet."""
     import time as _time
     now = int(_time.time())
-    ttl = _PRODUCTS_CACHE.get("ttl") or 0
-    if _PRODUCTS_CACHE.get("df") is not None and _PRODUCTS_CACHE.get("ts") and (now - _PRODUCTS_CACHE["ts"] < ttl):
-        return _PRODUCTS_CACHE["df"]
-    df = load_products()
-    _PRODUCTS_CACHE["df"] = df
-    _PRODUCTS_CACHE["ts"] = now
+    cache_key = sheet_name
+    cache_entry = _PRODUCTS_CACHE.get(cache_key, {})
+    if cache_entry.get("df") is not None and cache_entry.get("ts") and (now - cache_entry["ts"] < _PRODUCTS_CACHE_TTL):
+        return cache_entry["df"]
+    df = load_products(sheet_name=sheet_name)
+    _PRODUCTS_CACHE[cache_key] = {"df": df, "ts": now}
     return df
 
 
@@ -683,7 +732,10 @@ def dashboard():
 
 @app.route("/api/products")
 def api_products():
-    df = load_products_cached()
+    sheet_name = request.args.get("sheet", "generales").strip().lower()
+    if sheet_name not in ("generales", "ansioliticos"):
+        sheet_name = "generales"
+    df = load_products_cached(sheet_name=sheet_name)
     q = request.args.get("q", "").strip().lower()
     # Pagination params
     try:
@@ -748,6 +800,7 @@ def api_products():
         "per_page": per_page,
         "total_count": int(total_count),
         "total_pages": int(total_pages),
+        "sheet": sheet_name,
     })
 
 
@@ -1359,7 +1412,10 @@ def clients_delete(cid: int):
 # Apply client default margin on products list if available
 @app.route("/products")
 def products():
-    df = load_products_cached()
+    sheet_name = request.args.get("sheet", "generales").strip().lower()
+    if sheet_name not in ("generales", "ansioliticos"):
+        sheet_name = "generales"
+    df = load_products_cached(sheet_name=sheet_name)
     q = request.args.get("q", "").strip().lower()
     client_query = request.args.get("client", "").strip()
     # Pagination for initial render
@@ -1402,6 +1458,7 @@ def products():
         per_page=per_page,
         total_count=total_count,
         total_pages=total_pages,
+        sheet=sheet_name,
     )
 
 
@@ -1518,7 +1575,10 @@ def pipeline_set_state(order_id: str):
 # Exportar listado de productos a PDF con margen elegido
 @app.route("/products/export-pdf")
 def products_export_pdf():
-    df = load_products_cached()
+    sheet_name = request.args.get("sheet", "generales").strip().lower()
+    if sheet_name not in ("generales", "ansioliticos"):
+        sheet_name = "generales"
+    df = load_products_cached(sheet_name=sheet_name)
     q = request.args.get("q", "").strip().lower()
     margin = request.args.get("margin")
     if margin is None:

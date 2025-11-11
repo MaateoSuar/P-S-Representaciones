@@ -6,6 +6,7 @@
   </div>
   <div id="temp-alert" class="hidden fixed top-4 right-4 z-50 px-4 py-2 rounded bg-red-600 text-white shadow"></div>
   <form method="get" class="grid grid-cols-1 gap-3 mb-2" id="products-filter-form" onsubmit="return false;">
+    <input type="hidden" name="sheet" id="sheet-input" value="{{ sheet or 'generales' }}" />
     <!-- Row 1: Client full width -->
     <div class="relative">
       <label class="block text-sm text-gray-600">Cliente</label>
@@ -43,6 +44,18 @@
 
   <script id="clients-data" type="application/json">{{ (clients or [])|tojson }}</script>
 
+  <!-- Tabs for sheet selection -->
+  <div class="mb-4 border-b border-gray-200">
+    <nav class="-mb-px flex space-x-8">
+      <button type="button" class="sheet-tab px-1 py-4 border-b-2 font-medium text-sm {{ 'border-emerald-500 text-emerald-600' if (sheet or 'generales') == 'generales' else 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300' }}" data-sheet="generales">
+        Productos Generales
+      </button>
+      <button type="button" class="sheet-tab px-1 py-4 border-b-2 font-medium text-sm {{ 'border-emerald-500 text-emerald-600' if (sheet or 'generales') == 'ansioliticos' else 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300' }}" data-sheet="ansioliticos">
+        Ansiolíticos
+      </button>
+    </nav>
+  </div>
+
   <div class="overflow-x-auto">
     <table class="min-w-full divide-y divide-gray-200 table-striped">
       <thead class="bg-gray-50">
@@ -54,7 +67,7 @@
           <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">SubTotal</th>
           <th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Cant</th>
           <th class="px-4 py-2 text-right">
-            <a href="{{ url_for('cart_view') }}" class="inline-flex items-center justify-center px-4 py-2 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50">Ir al carrito</a>
+            <a href="{{ url_for('cart_view') }}" class="inline-flex items-center justify-center px-4 py-2 h-[36px] rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 whitespace-nowrap">Ir al carrito</a>
           </th>
         </tr>
       </thead>
@@ -105,6 +118,7 @@
   (function(){
     const form = document.getElementById('products-filter-form');
     if (!form) return;
+    const sheetInput = document.getElementById('sheet-input');
     const qInput = form.querySelector('input[name="q"]');
     const marginInput = form.querySelector('input[name="margin"]');
     const clientInput = form.querySelector('input[name="client"]');
@@ -119,6 +133,25 @@
     const lblTot = document.getElementById('pg-total');
     const lblCount = document.getElementById('pg-count');
     let timer;
+    
+    // Tab switching
+    document.querySelectorAll('.sheet-tab').forEach(tab => {
+      tab.addEventListener('click', function() {
+        const newSheet = this.getAttribute('data-sheet');
+        if (sheetInput) sheetInput.value = newSheet;
+        // Update tab styles
+        document.querySelectorAll('.sheet-tab').forEach(t => {
+          t.classList.remove('border-emerald-500', 'text-emerald-600');
+          t.classList.add('border-transparent', 'text-gray-500');
+        });
+        this.classList.remove('border-transparent', 'text-gray-500');
+        this.classList.add('border-emerald-500', 'text-emerald-600');
+        // Reset to page 1 and fetch
+        currentPage = 1;
+        fetchReason = 'apply';
+        fetchAndRender();
+      });
+    });
     let allClients = [];
     try {
       const el = document.getElementById('clients-data');
@@ -170,6 +203,7 @@
       const params = new URLSearchParams({ q: qInput.value || '' });
       params.set('page', String(currentPage));
       params.set('per_page', String(perPage));
+      if (sheetInput) params.set('sheet', sheetInput.value || 'generales');
       if (fetchReason === 'apply') {
         params.set('margin', marginInput.value || '');
         params.set('client', clientInput.value || '');
@@ -214,6 +248,21 @@
         if (typeof data.total_pages !== 'undefined') totalPages = parseInt(data.total_pages, 10) || 1;
         if (typeof data.total_count !== 'undefined') totalCount = parseInt(data.total_count, 10) || 0;
         updatePaginationUI();
+        
+        // Update sheet tab if provided
+        if (typeof data.sheet !== 'undefined' && sheetInput) {
+          sheetInput.value = data.sheet;
+          document.querySelectorAll('.sheet-tab').forEach(t => {
+            const tabSheet = t.getAttribute('data-sheet');
+            if (tabSheet === data.sheet) {
+              t.classList.remove('border-transparent', 'text-gray-500');
+              t.classList.add('border-emerald-500', 'text-emerald-600');
+            } else {
+              t.classList.remove('border-emerald-500', 'text-emerald-600');
+              t.classList.add('border-transparent', 'text-gray-500');
+            }
+          });
+        }
 
         const rows = (data.products || []).map(p => `
           <tr data-unit-price="${Number(p.final_price ?? 0).toFixed(2)}">
@@ -230,7 +279,7 @@
               </div>
             </td>
             <td class="px-4 py-2 text-center">
-              <form method="post" action="${cartAddUrl}" class="row-add-form inline-flex items-center gap-2">
+              <form method="post" action="${cartAddUrl}" class="row-add-form inline-flex items-center gap-2" onsubmit="return false;">
                 <input type="hidden" name="id" value="${p.id}" />
                 <input type="hidden" name="margin" value="${marginInput.value}" />
                 <input type="hidden" name="ajax" value="1" />
@@ -340,8 +389,10 @@
       const params = new URLSearchParams();
       const qv = qInput && qInput.value ? qInput.value.trim() : '';
       const mv = marginInput && marginInput.value ? marginInput.value : '';
+      const sv = sheetInput ? (sheetInput.value || 'generales') : 'generales';
       if (qv) params.set('q', qv);
       if (mv !== '') params.set('margin', mv);
+      params.set('sheet', sv);
       window.location.href = `/products/export-pdf?${params.toString()}`;
     });
     // Do not repaint table on client change automatically
