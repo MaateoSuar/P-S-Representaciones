@@ -1376,8 +1376,7 @@ def _generate_pdf_product_list(products: list, margin: float) -> BytesIO:
     margin_mm = 15 * mm
 
     x_name = margin_mm
-    x_venc = width - margin_mm - 160
-    x_cost = width - margin_mm - 100
+    x_venc = width - margin_mm - 120
     x_price = width - margin_mm - 40
 
     y = height - margin_mm
@@ -1392,7 +1391,6 @@ def _generate_pdf_product_list(products: list, margin: float) -> BytesIO:
         c.setFont("Helvetica-Bold", 10)
         c.drawString(x_name, cur_y, "Producto")
         c.drawRightString(x_venc, cur_y, "Venc.")
-        c.drawRightString(x_cost, cur_y, "Costo")
         c.drawRightString(x_price, cur_y, "P.Final")
         cur_y -= 5 * mm
         c.line(margin_mm, cur_y, width - margin_mm, cur_y)
@@ -1419,7 +1417,6 @@ def _generate_pdf_product_list(products: list, margin: float) -> BytesIO:
         if not venc:
             venc = "-"
         c.drawRightString(x_venc, y, venc)
-        c.drawRightString(x_cost, y, f"{float(p.get('cost',0)):.2f}")
         c.drawRightString(x_price, y, f"{float(p.get('final_price',0)):.2f}")
         y -= 6 * mm
 
