@@ -195,9 +195,13 @@ def _safe_filename(text: str) -> str:
     allowed = "-_. ()abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     return "".join(ch if ch in allowed else "_" for ch in text).strip()
 
-# Single-user login credentials (can be overridden via environment variables)
-LOGIN_USER = os.environ.get("APP_LOGIN_USER", "representaciones@gmail.com")
-LOGIN_PASS = os.environ.get("APP_LOGIN_PASS", "representaciones")
+# Lista de usuarios permitidos (usuario -> contraseña)
+# Se reemplaza el mecanismo anterior de un único usuario por esta lista fija.
+ALLOWED_USERS = {
+    "ppuentes": "Gmail2025",
+    "startalo": "Mago10",
+    "admin": "admin",
+}
 
 
 @app.before_request
@@ -214,7 +218,7 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
-        if username == LOGIN_USER and password == LOGIN_PASS:
+        if username in ALLOWED_USERS and ALLOWED_USERS.get(username) == password:
             session.clear()
             session["logged_in"] = True
             session["user"] = username
