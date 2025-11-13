@@ -472,14 +472,18 @@ def load_products(sheet_name: str = "generales") -> pd.DataFrame:
                 part = url.split("/d/", 1)[1]
                 doc_id = part.split("/", 1)[0]
             if doc_id:
-                # Map sheet names to gid values
+                # Map sheet names to gid values (configurable via env)
+                gid_generales = os.environ.get("GID_GENERALES", "1746527572")
+                gid_ansioliticos = os.environ.get("GID_ANSIOLITICOS", "524291397")
                 sheet_gid_map = {
-                    "generales": "1746527572",
-                    "ansioliticos": "524291397"
+                    "generales": gid_generales,
+                    "ansioliticos": gid_ansioliticos,
                 }
-                gid = sheet_gid_map.get(sheet_name, "1746527572")
+                gid = sheet_gid_map.get(sheet_name, gid_generales)
                 # Google Sheets CSV export by gid
-                export_url = f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=csv&gid={gid}"
+                # Add cache-busting param to avoid stale proxies/browsers
+                import time as _time
+                export_url = f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=csv&gid={gid}&cachebust={int(_time.time())}"
                 df = pd.read_csv(export_url)
             else:
                 # Fallback: try direct
@@ -496,6 +500,22 @@ def load_products(sheet_name: str = "generales") -> pd.DataFrame:
     # Normalize columns in case of mixed names
     # First, try to detect column names by checking all columns (case-insensitive)
     cols_lower = {str(c).lower().strip(): c for c in df.columns}
+    def _has_known_headers(cl: dict[str, str]) -> bool:
+        keys = set(cl.keys())
+        name_keys = {"name", "producto", "product", "nombre", "descripcion", "descripción"}
+        cost_keys = {"cost", "precio", "costo", "price", "-3%", "- 3%"}
+        venc_keys = {"vencimiento", "fecha vencimiento", "fecha_vencimiento", "fecha vencimeinto", "vto", "fecha vto", "venc", "fecha"}
+        return len(keys.intersection(name_keys)) > 0 or len(keys.intersection(cost_keys)) > 0 or len(keys.intersection(venc_keys)) > 0
+    # If no recognizable headers exist, assume first row is data that was used as header -> prepend it back
+    if not _has_known_headers(cols_lower) and len(df.columns) > 0:
+        try:
+            first_row = [str(c) for c in df.columns]
+            df.columns = list(range(len(df.columns)))
+            import pandas as _pd
+            df = _pd.concat([_pd.DataFrame([first_row]), df], ignore_index=True)
+            cols_lower = {str(c).lower().strip(): c for c in df.columns}
+        except Exception:
+            pass
     
     # Try to find name column (product name)
     name_col = None
@@ -542,6 +562,9 @@ def load_products(sheet_name: str = "generales") -> pd.DataFrame:
             if ("venc" in lc) or ("vto" in lc) or ("venci" in lc) or ("fecha" in lc):
                 venc_col = c
                 break
+    # If still not found, fallback to column C (3rd column) as requested
+    if not venc_col and len(df.columns) > 2:
+        venc_col = df.columns[2]
     
     # Rename columns to standard names
     rename_map = {}
@@ -571,6 +594,8 @@ def load_products(sheet_name: str = "generales") -> pd.DataFrame:
     
     # Coerce types and normalize values
     df["name"] = df["name"].astype(str).str.strip()
+    # Remove rows where name is empty after stripping
+    df = df[df["name"] != ""]
     
     # Normalize cost: handle LATAM formats "$ 1.234,56" -> "1234.56"
     cost_s = df["cost"].astype(str).str.strip()
@@ -582,12 +607,14 @@ def load_products(sheet_name: str = "generales") -> pd.DataFrame:
     # Replace comma decimal with dot
     cost_s = cost_s.str.replace(",", ".", regex=False)
     df["cost"] = pd.to_numeric(cost_s, errors="coerce")
+    # Missing/invalid costs should not exclude the product; fill with 0.0
+    df["cost"] = df["cost"].fillna(0.0)
     
     # Normalize vencimiento
     df["vencimiento"] = df["vencimiento"].fillna("").astype(str)
     
-    # Drop rows without name or cost not parsed
-    df = df.dropna(subset=["name", "cost"]).reset_index(drop=True)
+    # Drop rows without name only (keep items even if cost is 0)
+    df = df.dropna(subset=["name"]).reset_index(drop=True)
     
     # Only proceed if we have data
     if len(df) == 0:
@@ -609,6 +636,17 @@ def load_products_cached(sheet_name: str = "generales") -> pd.DataFrame:
     df = load_products(sheet_name=sheet_name)
     _PRODUCTS_CACHE[cache_key] = {"df": df, "ts": now}
     return df
+
+
+def products_cache_clear(sheet_name: str | None = None):
+    if not sheet_name:
+        _PRODUCTS_CACHE.clear()
+        return
+    try:
+        if sheet_name in _PRODUCTS_CACHE:
+            _PRODUCTS_CACHE.pop(sheet_name, None)
+    except Exception:
+        _PRODUCTS_CACHE.clear()
 
 
 def get_cart():
@@ -636,6 +674,15 @@ def inject_globals():
 def dashboard():
     df = load_products()
     clients = load_clients()
+    # Time window selection for Top products
+    from datetime import timedelta
+    days_param = request.args.get("days", "30").strip()
+    try:
+        days = max(1, int(days_param))
+    except Exception:
+        days = 30
+    today = date.today()
+    start_date = today - timedelta(days=days - 1)
     from collections import defaultdict
     today_str = date.today().isoformat()
     ventas_hoy = 0.0
@@ -644,6 +691,8 @@ def dashboard():
     clients_by_day = defaultdict(set)
     margin_val_by_day = defaultdict(float)
     sales_val_by_day = defaultdict(float)
+    # Aggregations
+    top_counts = {}
     if db_enabled():
         _sync_history_from_files()
         rows = db_list_history("") or []
@@ -671,6 +720,15 @@ def dashboard():
                 if day:
                     margin_val_by_day[day] += margin_val
                     sales_val_by_day[day] += price * qty
+                # Top products within selected date range
+                try:
+                    d_obj = date.fromisoformat(day) if day else None
+                except Exception:
+                    d_obj = None
+                if d_obj and (start_date <= d_obj <= today):
+                    name = str(it.get("name") or "").strip()
+                    if name:
+                        top_counts[name] = top_counts.get(name, 0.0) + float(qty)
     else:
         if os.path.isdir(ORDERS_DIR):
             for fname in os.listdir(ORDERS_DIR):
@@ -700,6 +758,15 @@ def dashboard():
                         if created_day:
                             margin_val_by_day[created_day] += margin_val
                             sales_val_by_day[created_day] += price * qty
+                        # Top products within selected date range
+                        try:
+                            d_obj = date.fromisoformat(created_day) if created_day else None
+                        except Exception:
+                            d_obj = None
+                        if d_obj and (start_date <= d_obj <= today):
+                            name = str(it.get("name") or "").strip()
+                            if name:
+                                top_counts[name] = top_counts.get(name, 0.0) + float(qty)
                 except Exception:
                     continue
     clientes_hoy = len(clientes_hoy_set)
@@ -724,7 +791,19 @@ def dashboard():
         base = sales_val_by_day.get(k, 0.0)
         mv = margin_val_by_day.get(k, 0.0)
         margin_values.append(round((mv / base * 100) if base > 0 else 0.0, 1))
-    return render_template("dashboard.html", stats=stats, sales_labels=sales_labels, sales_values=sales_values, clients_values=clients_values, margin_values=margin_values)
+    # Build Top 30 list by quantity
+    top_products = sorted(top_counts.items(), key=lambda kv: kv[1], reverse=True)[:30]
+    top_products = [{"name": k, "qty": round(v, 2)} for k, v in top_products]
+    return render_template(
+        "dashboard.html",
+        stats=stats,
+        sales_labels=sales_labels,
+        sales_values=sales_values,
+        clients_values=clients_values,
+        margin_values=margin_values,
+        top_products=top_products,
+        top_days=days,
+    )
 
 
  
@@ -735,7 +814,13 @@ def api_products():
     sheet_name = request.args.get("sheet", "generales").strip().lower()
     if sheet_name not in ("generales", "ansioliticos"):
         sheet_name = "generales"
-    df = load_products_cached(sheet_name=sheet_name)
+    # Allow forcing a refresh from the client
+    nocache = request.args.get("nocache") in ("1", "true", "yes")
+    if nocache:
+        products_cache_clear(sheet_name)
+        df = load_products(sheet_name=sheet_name)
+    else:
+        df = load_products_cached(sheet_name=sheet_name)
     q = request.args.get("q", "").strip().lower()
     # Pagination params
     try:
@@ -801,6 +886,7 @@ def api_products():
         "total_count": int(total_count),
         "total_pages": int(total_pages),
         "sheet": sheet_name,
+        "refreshed": bool(nocache),
     })
 
 
@@ -1073,10 +1159,13 @@ def generate_pdf_remito(pdf_path: str, order: dict):
     margin = 15 * mm
 
     # Column positions (right-aligned from the right margin)
-    x_cant = width - margin
-    x_punit = x_cant - 60  # P.Unit
-    x_venc = x_punit - 80  # Venc.
-    x_prod = margin        # Producto starts at left margin
+    x_subt = width - margin            # Subtotal at far right
+    x_cant = x_subt - 45               # Cantidad (right edge)
+    x_punit = x_cant - 60              # P.Unit (right edge)
+    x_venc = x_punit - 80              # Venc. (right edge)
+    x_prod = margin                    # Producto starts at left margin
+    # For quantity, compute center point within its column to center-align the number
+    x_cant_center = (x_punit + x_cant) / 2.0
 
     y = height - margin
     c.setFont("Helvetica-Bold", 14)
@@ -1097,6 +1186,7 @@ def generate_pdf_remito(pdf_path: str, order: dict):
         c.drawRightString(x_venc, current_y, "Venc.")
         c.drawRightString(x_punit, current_y, "P.Unit")
         c.drawRightString(x_cant, current_y, "Cant")
+        c.drawRightString(x_subt, current_y, "Subt")
         current_y -= 5 * mm
         c.line(margin, current_y, width - margin, current_y)
         current_y -= 5 * mm
@@ -1128,8 +1218,13 @@ def generate_pdf_remito(pdf_path: str, order: dict):
         if not venc:
             venc = "-"
         c.drawRightString(x_venc, y, venc)
-        c.drawRightString(x_punit, y, f"{item['final_price']:.2f}")
-        c.drawRightString(x_cant, y, str(item['qty']))
+        c.drawRightString(x_punit, y, f"${item['final_price']:.2f}")
+        c.drawCentredString(x_cant_center, y, str(item['qty']))
+        try:
+            subtotal = float(item['final_price']) * float(item['qty'])
+        except Exception:
+            subtotal = 0.0
+        c.drawRightString(x_subt, y, f"${subtotal:.2f}")
         y -= 7 * mm  # slightly taller rows to avoid visual overlap
 
     y -= 6 * mm
@@ -1649,7 +1744,8 @@ def _generate_pdf_product_list(products: list, margin: float, sheet_name: str = 
         if not venc:
             venc = "-"
         c.drawRightString(x_venc, y, venc)
-        c.drawRightString(x_price, y, f"{float(p.get('final_price',0)):.2f}")
+        unit_price = float(p.get('final_price',0))
+        c.drawRightString(x_price, y, f"${unit_price:.2f}")
         y -= 6 * mm
 
     c.showPage()

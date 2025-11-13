@@ -39,6 +39,43 @@
   </div>
 </div>
 
+<div class="bg-white rounded-lg shadow p-6 mb-8">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-lg font-semibold text-gray-800">Top 30 productos vendidos</h2>
+    <form method="get" action="{{ url_for('dashboard') }}" class="flex items-center gap-2">
+      <label class="text-sm text-gray-600" for="days">Período:</label>
+      <select id="days" name="days" class="input-field rounded px-2 py-1">
+        {% for d in [7, 15, 30, 60, 90] %}
+          <option value="{{ d }}" {% if (top_days or 30) == d %}selected{% endif %}>Últimos {{ d }} días</option>
+        {% endfor %}
+      </select>
+      <button class="px-3 py-1.5 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50" type="submit">Aplicar</button>
+    </form>
+  </div>
+  {% if top_products and top_products|length > 0 %}
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-gray-200 table-striped">
+        <thead class="bg-gray-50">
+          <tr>
+            <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
+            <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Cantidad</th>
+          </tr>
+        </thead>
+        <tbody class="bg-white divide-y divide-gray-200">
+          {% for item in top_products %}
+          <tr>
+            <td class="px-4 py-2">{{ item.name }}</td>
+            <td class="px-4 py-2 text-right">{{ '%.2f'|format(item.qty) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="text-gray-600">No hay ventas en el período seleccionado.</p>
+  {% endif %}
+</div>
+
 <script id="sales-data" type="application/json">{{ {'labels': sales_labels, 'values': sales_values, 'clients': clients_values, 'margins': margin_values} | tojson }}</script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>

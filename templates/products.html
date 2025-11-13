@@ -37,6 +37,7 @@
         </div>
         <button id="apply-btn" class="btn-primary px-4 py-2 h-[42px] rounded" type="submit">Aplicar</button>
         <button id="export-pdf-btn" class="inline-flex items-center justify-center px-4 py-2 h-[42px] rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50" type="button">Exportar Catalogo</button>
+        <button id="refresh-btn" class="inline-flex items-center justify-center px-4 py-2 h-[42px] rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50" type="button" title="Forzar actualización desde Excel/Sheets">Actualizar catálogo</button>
       </div>
     </div>
   </form>
@@ -147,9 +148,9 @@
         });
         this.classList.remove('border-transparent', 'text-gray-500');
         this.classList.add('border-emerald-500', 'text-emerald-600');
-        // Reset to page 1 and fetch
+        // Reset to page 1 and fetch forcing refresh from Sheets for the selected tab
         currentPage = 1;
-        fetchReason = 'apply';
+        fetchReason = 'refresh';
         fetchAndRender();
       });
     });
@@ -199,7 +200,7 @@
     }
     updatePaginationUI();
 
-    let fetchReason = 'search'; // 'search' | 'apply'
+    let fetchReason = 'search'; // 'search' | 'apply' | 'refresh'
     async function fetchAndRender(){
       const params = new URLSearchParams({ q: qInput.value || '' });
       params.set('page', String(currentPage));
@@ -209,10 +210,16 @@
         params.set('margin', marginInput.value || '');
         params.set('client', clientInput.value || '');
       }
+      if (fetchReason === 'refresh') {
+        params.set('nocache', '1');
+      }
       try {
         const res = await fetch(`/api/products?${params.toString()}`, { headers: { 'Accept': 'application/json' } });
         if (!res.ok) return;
         const data = await res.json();
+        if (fetchReason === 'refresh' && data && data.refreshed) {
+          showTempAlert('Catálogo actualizado');
+        }
         // Update cart badge if provided
         if (typeof data.cart_count !== 'undefined') {
           const count = data.cart_count;
@@ -397,6 +404,13 @@
       params.set('sheet', sv);
       window.location.href = `/products/export-pdf?${params.toString()}`;
     });
+    const refreshBtn = document.getElementById('refresh-btn');
+    if (refreshBtn) refreshBtn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      fetchReason='refresh';
+      // Keep current filters and page; just force refresh
+      fetchAndRender();
+    });
     // Do not repaint table on client change automatically
     function renderSuggestions() {
       if (!suggMatches.length) { suggBox.classList.add('hidden'); suggBox.innerHTML=''; return; }
@@ -555,6 +569,11 @@
 
     // initial bind for server-rendered rows
     bindRowForms();
+    // Force a one-time refresh from Sheets on initial load to avoid stale cache
+    try {
+      fetchReason = 'refresh';
+      fetchAndRender();
+    } catch(_) {}
 
     // Pagination controls
     if (btnPrev) btnPrev.addEventListener('click', () => {
