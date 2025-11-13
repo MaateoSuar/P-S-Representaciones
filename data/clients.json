@@ -48,5 +48,15 @@
     "default_margin": 86.0,
     "notes": "asd",
     "created_at": "2025-11-10T14:04:59.022631"
+  },
+  {
+    "id": 6,
+    "name": "Mateo Rodríguez Suar",
+    "zone": "4000",
+    "email": "maateosuar@gmail.com",
+    "phone": "03815508346",
+    "default_margin": 20.0,
+    "notes": "",
+    "created_at": "2025-11-13T13:32:02.063752"
   }
 ]

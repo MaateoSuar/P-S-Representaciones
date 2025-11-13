@@ -1,21 +1,44 @@
 {% extends 'layout.html' %}
 {% block content %}
+<div class="bg-white rounded-lg shadow p-4 mb-4 flex items-center justify-between">
+  <h1 class="text-lg font-semibold text-gray-800">Dashboard</h1>
+  <form method="get" action="{{ url_for('dashboard') }}" class="flex items-center gap-2">
+    <label class="text-sm text-gray-600" for="days-top">Período:</label>
+    <select id="days-top" name="days" class="input-field rounded px-2 py-1">
+      {% for d in [7, 15, 30, 60, 90] %}
+        <option value="{{ d }}" {% if (top_days or 30) == d %}selected{% endif %}>Últimos {{ d }} días</option>
+      {% endfor %}
+    </select>
+    <button class="px-3 py-1.5 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50" type="submit">Aplicar</button>
+  </form>
+</div>
+
+<script>
+  (function(){
+    const sel = document.getElementById('days-top');
+    const form = sel ? sel.closest('form') : null;
+    if (sel && form) {
+      sel.addEventListener('change', function(){ form.submit(); });
+    }
+  })();
+</script>
+
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
   <div class="bg-white rounded-lg shadow p-6 border-l-4 border-emerald-500">
     <p class="text-gray-500">Productos en Stock</p>
     <h3 class="text-2xl font-bold text-gray-800">{{ stats.productos }}</h3>
   </div>
   <div class="bg-white rounded-lg shadow p-6 border-l-4 border-emerald-500">
-    <p class="text-gray-500">Clientes del día</p>
-    <h3 class="text-2xl font-bold text-gray-800">{{ stats.clientes_dia }}</h3>
+    <p class="text-gray-500">Clientes (últimos {{ top_days }} días)</p>
+    <h3 class="text-2xl font-bold text-gray-800">{{ stats.clientes_periodo }}</h3>
   </div>
   <div class="bg-white rounded-lg shadow p-6 border-l-4 border-emerald-500">
-    <p class="text-gray-500">Ventas del día</p>
-    <h3 class="text-2xl font-bold text-gray-800">${{ '%.2f'|format(stats.ventas_hoy) }}</h3>
+    <p class="text-gray-500">Ventas (últimos {{ top_days }} días)</p>
+    <h3 class="text-2xl font-bold text-gray-800">${{ '%.2f'|format(stats.ventas_periodo) }}</h3>
   </div>
   <div class="bg-white rounded-lg shadow p-6 border-l-4 border-emerald-500">
-    <p class="text-gray-500">Margen promedio</p>
-    <h3 class="text-2xl font-bold text-gray-800">{{ '%.1f'|format(stats.margen_prom_hoy) }}%</h3>
+    <p class="text-gray-500">Margen promedio (últimos {{ top_days }} días)</p>
+    <h3 class="text-2xl font-bold text-gray-800">{{ '%.1f'|format(stats.margen_prom_periodo) }}%</h3>
   </div>
 </div>
 
@@ -32,7 +55,7 @@
 
 <div class="bg-white rounded-lg shadow p-6 mb-8">
   <div class="flex items-center justify-between mb-4">
-    <h2 class="text-lg font-semibold text-gray-800">Ventas últimos 30 días</h2>
+    <h2 class="text-lg font-semibold text-gray-800">Ventas últimos {{ top_days }} días</h2>
   </div>
   <div class="h-64">
     <canvas id="salesChart"></canvas>
@@ -41,16 +64,7 @@
 
 <div class="bg-white rounded-lg shadow p-6 mb-8">
   <div class="flex items-center justify-between mb-4">
-    <h2 class="text-lg font-semibold text-gray-800">Top 30 productos vendidos</h2>
-    <form method="get" action="{{ url_for('dashboard') }}" class="flex items-center gap-2">
-      <label class="text-sm text-gray-600" for="days">Período:</label>
-      <select id="days" name="days" class="input-field rounded px-2 py-1">
-        {% for d in [7, 15, 30, 60, 90] %}
-          <option value="{{ d }}" {% if (top_days or 30) == d %}selected{% endif %}>Últimos {{ d }} días</option>
-        {% endfor %}
-      </select>
-      <button class="px-3 py-1.5 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50" type="submit">Aplicar</button>
-    </form>
+    <h2 class="text-lg font-semibold text-gray-800">Top 30 productos vendidos (últimos {{ top_days }} días)</h2>
   </div>
   {% if top_products and top_products|length > 0 %}
     <div class="overflow-x-auto">

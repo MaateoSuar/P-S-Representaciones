@@ -673,20 +673,32 @@ def inject_globals():
 @app.route("/")
 def dashboard():
     df = load_products()
-    clients = load_clients()
-    # Time window selection for Top products
-    from datetime import timedelta
-    days_param = request.args.get("days", "30").strip()
+    # Productos en stock debe considerar ambas hojas
     try:
-        days = max(1, int(days_param))
+        total_productos = len(load_products_cached(sheet_name="generales")) + len(load_products_cached(sheet_name="ansioliticos"))
     except Exception:
-        days = 30
+        total_productos = len(df)
+    clients = load_clients()
+    # Time window selection for KPIs/Chart/Top products
+    from datetime import timedelta
+    raw_days = request.args.get("days")
+    if raw_days is not None:
+        try:
+            days = max(1, int(raw_days.strip()))
+        except Exception:
+            days = 30
+        # persist selection
+        session["dashboard_days"] = days
+        session.modified = True
+    else:
+        days = int(session.get("dashboard_days", 30))
     today = date.today()
     start_date = today - timedelta(days=days - 1)
     from collections import defaultdict
     today_str = date.today().isoformat()
-    ventas_hoy = 0.0
-    clientes_hoy_set = set()
+    # Period aggregations
+    ventas_periodo = 0.0
+    clientes_periodo_set = set()
     sales_by_day = defaultdict(float)
     clients_by_day = defaultdict(set)
     margin_val_by_day = defaultdict(float)
@@ -705,10 +717,15 @@ def dashboard():
                 sales_by_day[day] += total
                 if client_name:
                     clients_by_day[day].add(client_name)
-            if created.startswith(today_str):
-                ventas_hoy += total
-                if client_name:
-                    clientes_hoy_set.add(client_name)
+                # KPI period sums
+                try:
+                    d_obj = date.fromisoformat(day)
+                except Exception:
+                    d_obj = None
+                if d_obj and (start_date <= d_obj <= today):
+                    ventas_periodo += total
+                    if client_name:
+                        clientes_periodo_set.add(client_name)
             for it in (r.get("items") or []):
                 try:
                     qty = float(it.get("qty", 0))
@@ -745,6 +762,15 @@ def dashboard():
                         sales_by_day[day] += total
                         if client_name:
                             clients_by_day[day].add(client_name)
+                        # KPI period sums (file-based)
+                        try:
+                            d_obj = date.fromisoformat(day)
+                        except Exception:
+                            d_obj = None
+                        if d_obj and (start_date <= d_obj <= today):
+                            ventas_periodo += total
+                            if client_name:
+                                clientes_periodo_set.add(client_name)
                     if created.startswith(today_str):
                         ventas_hoy += float(order.get("total", 0.0))
                         if client_name:
@@ -769,21 +795,26 @@ def dashboard():
                                 top_counts[name] = top_counts.get(name, 0.0) + float(qty)
                 except Exception:
                     continue
-    clientes_hoy = len(clientes_hoy_set)
-    sales_today_val = ventas_hoy
-    sales_today_base = sales_val_by_day.get(today_str, 0.0)
-    margin_today_val = margin_val_by_day.get(today_str, 0.0)
-    margen_prom_hoy = (margin_today_val / sales_today_base * 100) if sales_today_base > 0 else 0.0
+    # KPIs within selected period
+    clientes_periodo = len(clientes_periodo_set)
+    # Compute margin % within period
+    period_sales_base = 0.0
+    period_margin_val = 0.0
+    # Build chronological labels for last N days
+    last_n = [date.fromordinal(today.toordinal() - i) for i in range(days - 1, -1, -1)]
+    iso_labels = [d.isoformat() for d in last_n]
+    for k in iso_labels:
+        period_sales_base += sales_val_by_day.get(k, 0.0)
+        period_margin_val += margin_val_by_day.get(k, 0.0)
+    margen_prom_periodo = (period_margin_val / period_sales_base * 100) if period_sales_base > 0 else 0.0
     stats = {
-        "productos": len(df),  # productos en stock
-        "clientes_dia": clientes_hoy,
-        "ventas_hoy": round(sales_today_val, 2),
-        "margen_prom_hoy": round(margen_prom_hoy, 1),
+        "productos": total_productos,  # productos en stock (ambas hojas)
+        "clientes_periodo": clientes_periodo,
+        "ventas_periodo": round(ventas_periodo, 2),
+        "margen_prom_periodo": round(margen_prom_periodo, 1),
     }
-    # Compose chronological labels and values for last 30 days
-    last_30 = [date.fromordinal(date.today().toordinal() - i) for i in range(29, -1, -1)]
-    sales_labels = [f"{d.day}/{d.month}" for d in last_30]
-    iso_labels = [d.isoformat() for d in last_30]
+    # Compose chronological labels and values for last N days
+    sales_labels = [f"{d.day}/{d.month}" for d in last_n]
     sales_values = [round(sales_by_day.get(k, 0.0), 2) for k in iso_labels]
     clients_values = [len(clients_by_day.get(k, set())) for k in iso_labels]
     margin_values = []
@@ -791,7 +822,7 @@ def dashboard():
         base = sales_val_by_day.get(k, 0.0)
         mv = margin_val_by_day.get(k, 0.0)
         margin_values.append(round((mv / base * 100) if base > 0 else 0.0, 1))
-    # Build Top 30 list by quantity
+    # Build Top 30 list by quantity within period
     top_products = sorted(top_counts.items(), key=lambda kv: kv[1], reverse=True)[:30]
     top_products = [{"name": k, "qty": round(v, 2)} for k, v in top_products]
     return render_template(
